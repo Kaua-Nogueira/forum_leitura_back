@@ -16,20 +16,28 @@ class ModerationController extends Controller
 {
     protected function resolveCurrentUser(Request $request): ?User
     {
-        $role = strtoupper($request->header('X-Demo-Role', 'ADMIN'));
-        if ($role === 'VISITOR') {
-            return null;
+        $bearerUser = AuthController::resolveUserFromRequest($request);
+        if ($bearerUser) {
+            return $bearerUser->is_banned ? null : $bearerUser;
         }
-        return User::where('role', $role)->first() ?? User::first();
+
+        $roleHeader = $request->header('X-Demo-Role');
+        if ($roleHeader && strtoupper($roleHeader) !== 'VISITOR') {
+            return User::where('role', strtoupper($roleHeader))->first();
+        }
+
+        return null;
     }
 
     /**
-     * POST /api/flags
-     * Report a Work, Topic, or Comment to the Moderation Queue.
+     * POST /api/flags (RBAC: MEMBER, MODERATOR, ADMIN)
      */
     public function createFlag(Request $request): JsonResponse
     {
         $user = $this->resolveCurrentUser($request);
+        if (!$user) {
+            return response()->json(['message' => 'Faça login para sinalizar conteúdos à moderação.'], 401);
+        }
 
         $validated = $request->validate([
             'target_type' => 'required|in:WORK,TOPIC,COMMENT',
@@ -47,8 +55,8 @@ class ModerationController extends Controller
             'target_excerpt' => $validated['target_excerpt'],
             'target_author_id' => null,
             'target_author_name' => 'Membro Sinalizado',
-            'reporter_id' => $user?->id,
-            'reporter_name' => $user?->name ?? 'Leitor da Comunidade',
+            'reporter_id' => $user->id,
+            'reporter_name' => $user->name,
             'reason' => $validated['reason'],
             'details' => $validated['details'],
             'status' => 'PENDING',
@@ -58,20 +66,27 @@ class ModerationController extends Controller
     }
 
     /**
-     * POST /api/moderation/flags/{id}/resolve
-     * Quick Actions for Moderator / Admin: APPROVE, HIDE (Soft Delete), BAN_USER.
+     * POST /api/moderation/flags/{id}/resolve (RBAC: MODERATOR or ADMIN)
      */
     public function resolveFlag(Request $request, int $id): JsonResponse
     {
         $user = $this->resolveCurrentUser($request);
-        if (!$user || !in_array($user->role, ['ADMIN', 'MODERATOR'], true)) {
-            return response()->json(['message' => 'Acesso restrito a Moderadores e Administradores.'], 403);
+        if (!$user || !$user->hasRole('ADMIN', 'MODERATOR')) {
+            return response()->json([
+                'message' => 'Acesso negado (RBAC): apenas Moderadores e Administradores podem deliberar na fila de moderação.',
+            ], 403);
         }
 
         $validated = $request->validate([
             'action' => 'required|in:APPROVE,HIDE,BAN_USER',
             'moderator_note' => 'nullable|string',
         ]);
+
+        if ($validated['action'] === 'BAN_USER' && !$user->hasRole('ADMIN')) {
+            return response()->json([
+                'message' => 'Acesso negado (RBAC): apenas o papel ADMIN tem permissão para banir contas permanentemente.',
+            ], 403);
+        }
 
         $flag = ModerationFlag::findOrFail($id);
 
@@ -107,21 +122,25 @@ class ModerationController extends Controller
         }
 
         if ($validated['action'] === 'BAN_USER' && $flag->target_author_id) {
-            User::where('id', $flag->target_author_id)->update(['is_banned' => true]);
+            User::where('id', $flag->target_author_id)->update([
+                'is_banned' => true,
+                'api_token' => null,
+            ]);
         }
 
         return response()->json(['flag' => $flag]);
     }
 
     /**
-     * PUT /api/moderation/settings
-     * Admin endpoint to update the Global Amazon Affiliate Tag & Moderation policy.
+     * PUT /api/moderation/settings (RBAC: ADMIN only)
      */
     public function updateSettings(Request $request): JsonResponse
     {
         $user = $this->resolveCurrentUser($request);
-        if (!$user || $user->role !== 'ADMIN') {
-            return response()->json(['message' => 'Apenas Administradores podem alterar a tag global de afiliados.'], 403);
+        if (!$user || !$user->hasRole('ADMIN')) {
+            return response()->json([
+                'message' => 'Acesso negado (RBAC): apenas Administradores podem alterar a tag global de afiliados.',
+            ], 403);
         }
 
         $validated = $request->validate([

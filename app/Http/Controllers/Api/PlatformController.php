@@ -17,15 +17,21 @@ use Illuminate\Support\Str;
 class PlatformController extends Controller
 {
     /**
-     * Resolve active user from X-Demo-Role header (or default Admin).
+     * Resolve authenticated user via Bearer token (with optional X-Demo-Role fallback).
      */
     protected function resolveCurrentUser(Request $request): ?User
     {
-        $role = strtoupper($request->header('X-Demo-Role', 'ADMIN'));
-        if ($role === 'VISITOR') {
-            return null;
+        $bearerUser = AuthController::resolveUserFromRequest($request);
+        if ($bearerUser) {
+            return $bearerUser->is_banned ? null : $bearerUser;
         }
-        return User::where('role', $role)->first() ?? User::first();
+
+        $roleHeader = $request->header('X-Demo-Role');
+        if ($roleHeader && strtoupper($roleHeader) !== 'VISITOR') {
+            return User::where('role', strtoupper($roleHeader))->first();
+        }
+
+        return null;
     }
 
     /**
@@ -65,13 +71,15 @@ class PlatformController extends Controller
 
     /**
      * POST /api/works
-     * Submit a new Curated Work with Affiliate link & Notable Quotes.
+     * Submit a new Curated Work with Affiliate link & Notable Quotes (RBAC: MEMBER, MODERATOR, ADMIN).
      */
     public function createWork(Request $request): JsonResponse
     {
         $user = $this->resolveCurrentUser($request);
-        if (!$user) {
-            return response()->json(['message' => 'Apenas membros autenticados podem indicar obras.'], 403);
+        if (!$user || !$user->hasRole('MEMBER', 'MODERATOR', 'ADMIN')) {
+            return response()->json([
+                'message' => 'Autenticação necessária: faça login como Membro, Moderador ou Admin para publicar obras.',
+            ], 401);
         }
 
         $validated = $request->validate([
@@ -87,12 +95,13 @@ class PlatformController extends Controller
             'affiliate_url' => 'required|string|max:1024',
             'affiliate_cta_label' => 'nullable|string|max:120',
             'affiliate_price_hint' => 'nullable|string|max:120',
+            'publisher_or_studio' => 'nullable|string|max:160',
             'is_featured' => 'nullable|boolean',
         ]);
 
         $settings = PlatformSetting::first();
         $requiresMod = ($settings?->require_moderation_for_new_works ?? true)
-            && !in_array($user->role, ['ADMIN', 'MODERATOR'], true);
+            && !$user->hasRole('ADMIN', 'MODERATOR');
 
         $slug = Str::slug($validated['title']) . '-' . random_int(100, 999);
 
@@ -110,6 +119,7 @@ class PlatformController extends Controller
             'affiliate_url' => $validated['affiliate_url'],
             'affiliate_cta_label' => $validated['affiliate_cta_label'] ?? 'Adquirir na Amazon',
             'affiliate_price_hint' => $validated['affiliate_price_hint'] ?? 'Edição Recomendada',
+            'publisher_or_studio' => $validated['publisher_or_studio'] ?? 'Edição Recomendada',
             'is_featured' => $validated['is_featured'] ?? false,
             'editorial_rating' => 4.9,
             'status' => $requiresMod ? 'PENDING' : 'APPROVED',
@@ -143,7 +153,6 @@ class PlatformController extends Controller
 
     /**
      * POST /api/works/{id}/affiliate-click
-     * Tracks click on affiliate CTA button.
      */
     public function trackAffiliateClick(int $id): JsonResponse
     {
@@ -156,14 +165,15 @@ class PlatformController extends Controller
     }
 
     /**
-     * POST /api/topics
-     * Creates a new Forum Discussion Topic.
+     * POST /api/topics (RBAC: MEMBER, MODERATOR, ADMIN)
      */
     public function createTopic(Request $request): JsonResponse
     {
         $user = $this->resolveCurrentUser($request);
-        if (!$user) {
-            return response()->json(['message' => 'Apenas membros podem abrir tópicos.'], 403);
+        if (!$user || !$user->hasRole('MEMBER', 'MODERATOR', 'ADMIN')) {
+            return response()->json([
+                'message' => 'Autenticação necessária: faça login para publicar um ensaio.',
+            ], 401);
         }
 
         $validated = $request->validate([
@@ -195,14 +205,15 @@ class PlatformController extends Controller
     }
 
     /**
-     * POST /api/comments
-     * Posts a Review or Nested Reply on a Work or Topic.
+     * POST /api/comments (RBAC: MEMBER, MODERATOR, ADMIN)
      */
     public function createComment(Request $request): JsonResponse
     {
         $user = $this->resolveCurrentUser($request);
-        if (!$user) {
-            return response()->json(['message' => 'Autenticação necessária para comentar.'], 403);
+        if (!$user || !$user->hasRole('MEMBER', 'MODERATOR', 'ADMIN')) {
+            return response()->json([
+                'message' => 'Faça login na sua conta para publicar comentários.',
+            ], 401);
         }
 
         $validated = $request->validate([

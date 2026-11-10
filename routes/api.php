@@ -1,15 +1,27 @@
 <?php
 
+use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ModerationController;
 use App\Http\Controllers\Api\PlatformController;
 use Illuminate\Support\Facades\Route;
 
 /*
 |--------------------------------------------------------------------------
-| VERITAS & LITTERAE — API Routes (Decoupled Laravel REST API)
+| VERITAS & LITTERAE — API Routes (Decoupled Laravel REST API + RBAC Auth)
 |--------------------------------------------------------------------------
 */
 
+// Autenticação & RBAC (Bearer Token)
+Route::post('/auth/login', [AuthController::class, 'login']);
+Route::post('/auth/register', [AuthController::class, 'register']);
+Route::get('/auth/me', [AuthController::class, 'me']);
+Route::post('/auth/logout', [AuthController::class, 'logout']);
+
+// Gestão de Usuários e Papéis RBAC (ADMIN / MODERATOR)
+Route::get('/users', [AuthController::class, 'listUsers']);
+Route::patch('/users/{id}/role', [AuthController::class, 'updateUserRole']);
+
+// Dados Iniciais do Acervo & Fórum
 Route::get('/bootstrap', [PlatformController::class, 'bootstrap']);
 
 // Catálogo Curado de Obras & Afiliados
