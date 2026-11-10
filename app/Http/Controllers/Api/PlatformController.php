@@ -26,6 +26,16 @@ class PlatformController extends Controller
             return $bearerUser->is_banned ? null : $bearerUser;
         }
 
+        $userIdHeader = $request->header('X-User-Id');
+        if ($userIdHeader && is_numeric($userIdHeader)) {
+            $idUser = User::where('id', (int) $userIdHeader)
+                ->where('is_banned', false)
+                ->first();
+            if ($idUser) {
+                return $idUser;
+            }
+        }
+
         $roleHeader = $request->header('X-Demo-Role');
         if ($roleHeader && strtoupper($roleHeader) !== 'VISITOR') {
             $roleUser = User::where('role', strtoupper($roleHeader))
@@ -65,12 +75,15 @@ class PlatformController extends Controller
             'editorial_edition_label' => 'Edição de Outono • Vol. IV — MMXXVI',
         ]);
 
+        $users = User::orderBy('id')->get();
+
         return response()->json([
             'categories' => $categories,
             'works' => $works,
             'topics' => $topics,
             'moderation_flags' => $flags,
             'settings' => $settings,
+            'users' => $users,
         ]);
     }
 

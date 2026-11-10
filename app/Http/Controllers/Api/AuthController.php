@@ -199,4 +199,42 @@ class AuthController extends Controller
             'message' => 'Permissões RBAC atualizadas com sucesso.',
         ]);
     }
+
+    /**
+     * PUT /api/auth/profile
+     * Updates the current user's public literary profile (name, title_badge, bio).
+     */
+    public function updateProfile(Request $request): JsonResponse
+    {
+        $user = self::resolveUserFromRequest($request);
+        if (!$user) {
+            $userIdHeader = $request->header('X-User-Id');
+            if ($userIdHeader && is_numeric($userIdHeader)) {
+                $user = User::find((int) $userIdHeader);
+            }
+        }
+
+        if (!$user) {
+            return response()->json([
+                'message' => 'Faça login para atualizar seu perfil.',
+            ], 401);
+        }
+
+        $validated = $request->validate([
+            'name' => 'required|string|max:120',
+            'title_badge' => 'nullable|string|max:120',
+            'bio' => 'nullable|string|max:600',
+        ]);
+
+        $user->update([
+            'name' => $validated['name'],
+            'title_badge' => $validated['title_badge'] ?? $user->title_badge,
+            'bio' => $validated['bio'] ?? $user->bio,
+        ]);
+
+        return response()->json([
+            'user' => $user,
+            'message' => 'Perfil atualizado com sucesso.',
+        ]);
+    }
 }
