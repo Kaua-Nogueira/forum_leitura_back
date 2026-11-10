@@ -69,6 +69,83 @@ class PlatformController extends Controller
             ->latest()
             ->get();
 
+        // Garante que qualquer Obra ou Ensaio com status PENDING possua item correspondente na fila de moderação
+        foreach ($works as $w) {
+            if ($w->status === 'PENDING') {
+                ModerationFlag::firstOrCreate(
+                    [
+                        'target_type' => 'WORK',
+                        'target_id' => $w->id,
+                        'status' => 'PENDING',
+                    ],
+                    [
+                        'target_title' => 'Revisão de Nova Obra/Resenha: ' . $w->title,
+                        'target_excerpt' => Str::limit($w->synopsis, 220),
+                        'target_author_id' => $w->submitted_by_id,
+                        'target_author_name' => $w->submittedBy?->name ?? $w->creator ?? 'Membro',
+                        'reporter_id' => $w->submitted_by_id,
+                        'reporter_name' => 'Fila Obrigatória de Revisão Editorial',
+                        'reason' => 'BROKEN_AFFILIATE_LINK',
+                        'details' => 'Todo texto publicado aguarda revisão obrigatória da moderação antes de ir ao ar.',
+                    ]
+                );
+            }
+        }
+
+        foreach ($topics as $t) {
+            if ($t->status === 'PENDING') {
+                ModerationFlag::firstOrCreate(
+                    [
+                        'target_type' => 'TOPIC',
+                        'target_id' => $t->id,
+                        'status' => 'PENDING',
+                    ],
+                    [
+                        'target_title' => 'Revisão de Novo Ensaio: ' . $t->title,
+                        'target_excerpt' => Str::limit($t->body, 220),
+                        'target_author_id' => $t->author_id,
+                        'target_author_name' => $t->author?->name ?? 'Membro',
+                        'reporter_id' => $t->author_id,
+                        'reporter_name' => 'Fila Obrigatória de Revisão Editorial',
+                        'reason' => 'GUIDELINE_VIOLATION',
+                        'details' => 'Todo ensaio publicado aguarda revisão obrigatória da moderação antes de ir ao ar.',
+                    ]
+                );
+            }
+        }
+
+        if (ModerationFlag::count() === 0) {
+            ModerationFlag::create([
+                'target_type' => 'WORK',
+                'target_id' => 4,
+                'target_title' => 'Verificação de Edição & Link de Afiliado: Ortodoxia (G. K. Chesterton)',
+                'target_excerpt' => 'Solicitação de revisão do link da edição de capa dura e nota bibliográfica da tradução.',
+                'target_author_id' => 3,
+                'target_author_name' => 'Lucas Albuquerque',
+                'reporter_id' => 2,
+                'reporter_name' => 'Helena Monteiro de Barros',
+                'reason' => 'BROKEN_AFFILIATE_LINK',
+                'details' => 'Conferir se a tag global de associado Amazon está aplicada ao ASIN da edição recomendada.',
+                'status' => 'PENDING',
+            ]);
+
+            ModerationFlag::create([
+                'target_type' => 'TOPIC',
+                'target_id' => 2,
+                'target_title' => 'Revisão Editorial Concluída: Ordo Amoris e a Educação da Imaginação Moral',
+                'target_excerpt' => 'Guia prático de transição para famílias e tutores: como harmonizar a leitura de livros vivos com o Trivium.',
+                'target_author_id' => 2,
+                'target_author_name' => 'Helena Monteiro de Barros',
+                'reporter_id' => 1,
+                'reporter_name' => 'Fila Obrigatória de Revisão Editorial',
+                'reason' => 'GUIDELINE_VIOLATION',
+                'details' => 'Revisão inicial obrigatória concluída pelo Conselho Editorial.',
+                'status' => 'RESOLVED_APPROVED',
+                'moderator_note' => 'Ensaio aprovado em conformidade com a Carta de Princípios.',
+                'resolved_at' => now(),
+            ]);
+        }
+
         $flags = ModerationFlag::latest()->get();
 
         $settings = PlatformSetting::first() ?? PlatformSetting::create([

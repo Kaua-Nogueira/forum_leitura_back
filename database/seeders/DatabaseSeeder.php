@@ -321,5 +321,21 @@ class DatabaseSeeder extends Seeder
                 'status' => 'APPROVED',
             ]
         );
+
+        if (ModerationFlag::count() === 0) {
+            ModerationFlag::create([
+                'target_type' => 'WORK',
+                'target_id' => 4,
+                'target_title' => 'Verificação de Edição & Link de Afiliado: Ortodoxia (G. K. Chesterton)',
+                'target_excerpt' => 'Solicitação de revisão do link da edição de capa dura e nota bibliográfica da tradução.',
+                'target_author_id' => $member->id,
+                'target_author_name' => $member->name,
+                'reporter_id' => $moderator->id,
+                'reporter_name' => $moderator->name,
+                'reason' => 'BROKEN_AFFILIATE_LINK',
+                'details' => 'Conferir se a tag global de associado Amazon está aplicada ao ASIN da edição recomendada.',
+                'status' => 'PENDING',
+            ]);
+        }
     }
 }
