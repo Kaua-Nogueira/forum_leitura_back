@@ -194,8 +194,29 @@ class AuthController extends Controller
 
         $target->save();
 
+        $actionType = 'UPDATE_USER_ROLE';
+        $reasonText = 'Alteração de papel RBAC para ' . $target->role;
+        if (isset($validated['is_banned'])) {
+            $actionType = $target->is_banned ? 'BAN_USER' : 'UNBAN_USER';
+            $reasonText = $target->is_banned
+                ? 'Conta suspensa pelo Administrador.'
+                : 'Suspensão revogada pelo Administrador.';
+        }
+
+        $log = ModerationController::recordAuditLog(
+            $actor,
+            $actionType,
+            'USER',
+            $target->id,
+            $target->name . ' (' . $target->email . ')',
+            $target->name,
+            $reasonText,
+            $request
+        );
+
         return response()->json([
             'user' => $target,
+            'log' => $log,
             'message' => 'Permissões RBAC atualizadas com sucesso.',
         ]);
     }

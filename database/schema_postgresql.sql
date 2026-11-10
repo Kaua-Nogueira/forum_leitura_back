@@ -158,6 +158,39 @@ CREATE TABLE IF NOT EXISTS platform_settings (
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 8. Tabela de Curtidas / Votos Únicos por Usuário (1 curtida por usuário em cada item)
+CREATE TABLE IF NOT EXISTS upvotes (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    target_type VARCHAR(24) NOT NULL CHECK (target_type IN ('WORK', 'TOPIC', 'COMMENT')),
+    target_id BIGINT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT upvotes_user_target_unique UNIQUE (user_id, target_type, target_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_upvotes_target ON upvotes(target_type, target_id);
+
+-- 9. Tabela de Logs de Auditoria da Moderação (Registro obrigatório de toda ação/exclusão)
+CREATE TABLE IF NOT EXISTS moderation_logs (
+    id BIGSERIAL PRIMARY KEY,
+    actor_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    actor_name VARCHAR(255) NOT NULL,
+    actor_role VARCHAR(24) NOT NULL,
+    action_type VARCHAR(48) NOT NULL,
+    target_type VARCHAR(24) NOT NULL,
+    target_id BIGINT NULL,
+    target_title VARCHAR(255) NOT NULL,
+    target_author_name VARCHAR(255) NULL,
+    reason TEXT NULL,
+    ip_address VARCHAR(64) NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_moderation_logs_action ON moderation_logs(action_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_moderation_logs_target ON moderation_logs(target_type, target_id);
+
 -- =============================================================================
 -- CARGA INICIAL (SEED) — CONFIGURAÇÕES, USUÁRIOS RBAC E CATEGORIAS
 -- Senha padrão das contas iniciais (bcrypt de 'password'):

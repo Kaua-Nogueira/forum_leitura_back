@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\Category;
 use App\Models\Comment;
 use App\Models\ModerationFlag;
+use App\Models\ModerationLog;
 use App\Models\PlatformSetting;
 use App\Models\Topic;
+use App\Models\Upvote;
 use App\Models\User;
 use App\Models\Work;
 use Illuminate\Http\JsonResponse;
@@ -17,7 +19,8 @@ use Illuminate\Support\Str;
 class PlatformController extends Controller
 {
     /**
-     * Resolve authenticated user via Bearer token (with X-Demo-Role or default Member fallback).
+     * Resolve authenticated user via Bearer token or X-User-Id.
+     * Unauthenticated visitors (VISITOR) always resolve to null.
      */
     protected function resolveCurrentUser(Request $request): ?User
     {
@@ -46,7 +49,7 @@ class PlatformController extends Controller
             }
         }
 
-        return User::where('is_banned', false)->orderBy('id')->first();
+        return null;
     }
 
     /**
@@ -77,11 +80,46 @@ class PlatformController extends Controller
 
         $users = User::orderBy('id')->get();
 
+        if (ModerationLog::count() === 0) {
+            $modUser = User::whereIn('role', ['MODERATOR', 'ADMIN'])->orderBy('id')->first();
+            if ($modUser) {
+                ModerationLog::create([
+                    'actor_id' => $modUser->id,
+                    'actor_name' => $modUser->name,
+                    'actor_role' => $modUser->role,
+                    'action_type' => 'APPROVE_WORK',
+                    'target_type' => 'WORK',
+                    'target_id' => 1,
+                    'target_title' => 'Confissões (Santo Agostinho)',
+                    'target_author_name' => 'Prof. Augusto Vasconcelos',
+                    'reason' => 'Revisão editorial inicial concluída: tradução e aparato crítico verificados.',
+                    'ip_address' => '127.0.0.1',
+                ]);
+                ModerationLog::create([
+                    'actor_id' => $modUser->id,
+                    'actor_name' => $modUser->name,
+                    'actor_role' => $modUser->role,
+                    'action_type' => 'APPROVE_TOPIC',
+                    'target_type' => 'TOPIC',
+                    'target_id' => 1,
+                    'target_title' => 'A Ordem do Amor (Ordo Amoris) em Santo Agostinho',
+                    'target_author_name' => 'Prof. Augusto Vasconcelos',
+                    'reason' => 'Ensaio aprovado pelo Conselho Editorial para abertura da cátedra Letras & Teologia.',
+                    'ip_address' => '127.0.0.1',
+                ]);
+            }
+        }
+
+        $moderationLogs = ModerationLog::latest()->limit(250)->get();
+        $upvotes = Upvote::select(['user_id', 'target_type', 'target_id'])->get();
+
         return response()->json([
             'categories' => $categories,
             'works' => $works,
             'topics' => $topics,
             'moderation_flags' => $flags,
+            'moderation_logs' => $moderationLogs,
+            'upvotes' => $upvotes,
             'settings' => $settings,
             'users' => $users,
         ]);
@@ -284,23 +322,62 @@ class PlatformController extends Controller
     }
 
     /**
-     * POST /api/upvotes
+     * POST /api/upvotes (RBAC: MEMBER, MODERATOR, ADMIN — 1 upvote per user per item)
      */
     public function toggleUpvote(Request $request): JsonResponse
     {
+        $user = $this->resolveCurrentUser($request);
+        if (!$user || !$user->hasRole('MEMBER', 'MODERATOR', 'ADMIN')) {
+            return response()->json([
+                'message' => 'Para curtir e comentar é necessário ter uma conta e estar logado.',
+            ], 401);
+        }
+
         $validated = $request->validate([
-            'target_type' => 'required|in:TOPIC,COMMENT',
+            'target_type' => 'required|in:WORK,TOPIC,COMMENT',
             'target_id' => 'required|integer',
+        ]);
+
+        $alreadyLiked = Upvote::where('user_id', $user->id)
+            ->where('target_type', $validated['target_type'])
+            ->where('target_id', $validated['target_id'])
+            ->exists();
+
+        if ($alreadyLiked) {
+            return response()->json([
+                'message' => 'Você já deu curtida neste item. Cada usuário só pode curtir uma única vez.',
+                'already_upvoted' => true,
+            ], 409);
+        }
+
+        Upvote::create([
+            'user_id' => $user->id,
+            'target_type' => $validated['target_type'],
+            'target_id' => $validated['target_id'],
         ]);
 
         if ($validated['target_type'] === 'TOPIC') {
             $topic = Topic::findOrFail($validated['target_id']);
             $topic->increment('upvotes_count');
-            return response()->json(['upvotes_count' => $topic->upvotes_count]);
+            return response()->json([
+                'upvotes_count' => $topic->upvotes_count,
+                'already_upvoted' => true,
+            ]);
+        }
+
+        if ($validated['target_type'] === 'WORK') {
+            $work = Work::findOrFail($validated['target_id']);
+            return response()->json([
+                'upvotes_count' => 1,
+                'already_upvoted' => true,
+            ]);
         }
 
         $comment = Comment::findOrFail($validated['target_id']);
         $comment->increment('upvotes_count');
-        return response()->json(['upvotes_count' => $comment->upvotes_count]);
+        return response()->json([
+            'upvotes_count' => $comment->upvotes_count,
+            'already_upvoted' => true,
+        ]);
     }
 }

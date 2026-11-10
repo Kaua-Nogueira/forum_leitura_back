@@ -5,12 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Comment;
 use App\Models\ModerationFlag;
+use App\Models\ModerationLog;
 use App\Models\PlatformSetting;
 use App\Models\Topic;
 use App\Models\User;
 use App\Models\Work;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 
 class ModerationController extends Controller
 {
@@ -21,12 +23,48 @@ class ModerationController extends Controller
             return $bearerUser->is_banned ? null : $bearerUser;
         }
 
+        $userIdHeader = $request->header('X-User-Id');
+        if ($userIdHeader && is_numeric($userIdHeader)) {
+            $idUser = User::where('id', (int) $userIdHeader)
+                ->where('is_banned', false)
+                ->first();
+            if ($idUser) {
+                return $idUser;
+            }
+        }
+
         $roleHeader = $request->header('X-Demo-Role');
         if ($roleHeader && strtoupper($roleHeader) !== 'VISITOR') {
-            return User::where('role', strtoupper($roleHeader))->first();
+            return User::where('role', strtoupper($roleHeader))
+                ->where('is_banned', false)
+                ->first();
         }
 
         return null;
+    }
+
+    public static function recordAuditLog(
+        User $actor,
+        string $actionType,
+        string $targetType,
+        ?int $targetId,
+        string $targetTitle,
+        ?string $targetAuthorName,
+        ?string $reason,
+        Request $request
+    ): ModerationLog {
+        return ModerationLog::create([
+            'actor_id' => $actor->id,
+            'actor_name' => $actor->name,
+            'actor_role' => $actor->role,
+            'action_type' => $actionType,
+            'target_type' => $targetType,
+            'target_id' => $targetId,
+            'target_title' => Str::limit($targetTitle, 240),
+            'target_author_name' => $targetAuthorName,
+            'reason' => $reason ?: 'Ação de moderação registrada no livro de auditoria.',
+            'ip_address' => $request->ip() ?? '127.0.0.1',
+        ]);
     }
 
     /**
@@ -128,7 +166,21 @@ class ModerationController extends Controller
             ]);
         }
 
-        return response()->json(['flag' => $flag]);
+        $log = self::recordAuditLog(
+            $user,
+            'RESOLVE_FLAG_' . $validated['action'],
+            $flag->target_type,
+            $flag->target_id,
+            $flag->target_title,
+            $flag->target_author_name,
+            $validated['moderator_note'] ?? 'Deliberação registrada na fila de moderação.',
+            $request
+        );
+
+        return response()->json([
+            'flag' => $flag,
+            'log' => $log,
+        ]);
     }
 
     /**
@@ -153,7 +205,21 @@ class ModerationController extends Controller
         $settings->fill($validated);
         $settings->save();
 
-        return response()->json(['settings' => $settings]);
+        $log = self::recordAuditLog(
+            $user,
+            'UPDATE_SETTINGS',
+            'SETTINGS',
+            1,
+            'Tag Global de Afiliado Amazon: ' . $settings->amazon_associate_tag,
+            $user->name,
+            'Atualização das configurações globais de afiliados e diretrizes editoriais.',
+            $request
+        );
+
+        return response()->json([
+            'settings' => $settings,
+            'log' => $log,
+        ]);
     }
 
     /**
@@ -173,7 +239,7 @@ class ModerationController extends Controller
             'moderation_note' => 'nullable|string',
         ]);
 
-        $work = Work::findOrFail($id);
+        $work = Work::with('submittedBy')->findOrFail($id);
         $work->update([
             'status' => $validated['status'],
             'moderation_note' => $validated['moderation_note'] ?? null,
@@ -188,9 +254,23 @@ class ModerationController extends Controller
                 'resolved_at' => now(),
             ]);
 
+        $log = self::recordAuditLog(
+            $user,
+            $validated['status'] === 'APPROVED' ? 'APPROVE_WORK' : 'REJECT_WORK',
+            'WORK',
+            $work->id,
+            $work->title,
+            $work->submittedBy?->name ?? 'Autor Comunitário',
+            $validated['moderation_note'] ?? 'Revisão editorial de obra/resenha.',
+            $request
+        );
+
         $work->load(['category', 'submittedBy', 'comments']);
 
-        return response()->json(['work' => $work]);
+        return response()->json([
+            'work' => $work,
+            'log' => $log,
+        ]);
     }
 
     /**
@@ -210,7 +290,7 @@ class ModerationController extends Controller
             'moderation_note' => 'nullable|string',
         ]);
 
-        $topic = Topic::findOrFail($id);
+        $topic = Topic::with('author')->findOrFail($id);
         $topic->update([
             'status' => $validated['status'],
             'moderation_note' => $validated['moderation_note'] ?? null,
@@ -225,8 +305,120 @@ class ModerationController extends Controller
                 'resolved_at' => now(),
             ]);
 
+        $log = self::recordAuditLog(
+            $user,
+            $validated['status'] === 'APPROVED' ? 'APPROVE_TOPIC' : 'REJECT_TOPIC',
+            'TOPIC',
+            $topic->id,
+            $topic->title,
+            $topic->author?->name ?? 'Autor Comunitário',
+            $validated['moderation_note'] ?? 'Revisão editorial de ensaio.',
+            $request
+        );
+
         $topic->load(['category', 'work', 'author', 'comments']);
 
-        return response()->json(['topic' => $topic]);
+        return response()->json([
+            'topic' => $topic,
+            'log' => $log,
+        ]);
+    }
+
+    /**
+     * POST /api/moderation/delete (RBAC: MODERATOR or ADMIN)
+     * Moderators can delete ANY item (WORK, TOPIC, or COMMENT), and every deletion is recorded in moderation_logs.
+     */
+    public function deleteItem(Request $request): JsonResponse
+    {
+        $user = $this->resolveCurrentUser($request);
+        if (!$user || !$user->hasRole('ADMIN', 'MODERATOR')) {
+            return response()->json([
+                'message' => 'Acesso negado (RBAC): apenas Moderadores e Administradores podem excluir conteúdos.',
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'target_type' => 'required|in:WORK,TOPIC,COMMENT',
+            'target_id' => 'required|integer',
+            'reason' => 'required|string|min:3|max:500',
+        ], [
+            'reason.required' => 'Informe a justificativa da exclusão para registro no log de auditoria.',
+            'reason.min' => 'A justificativa da exclusão deve ter pelo menos 3 caracteres.',
+        ]);
+
+        $targetType = $validated['target_type'];
+        $targetId = (int) $validated['target_id'];
+        $reason = $validated['reason'];
+
+        $targetTitle = '';
+        $targetAuthorName = 'Membro da Comunidade';
+
+        if ($targetType === 'WORK') {
+            $work = Work::with('submittedBy')->findOrFail($targetId);
+            $targetTitle = $work->title;
+            $targetAuthorName = $work->submittedBy?->name ?? $work->creator ?? 'Autor';
+            $work->update([
+                'status' => 'HIDDEN',
+                'moderation_note' => 'Excluído pela Moderação: ' . $reason,
+            ]);
+            $work->delete();
+        } elseif ($targetType === 'TOPIC') {
+            $topic = Topic::with('author')->findOrFail($targetId);
+            $targetTitle = $topic->title;
+            $targetAuthorName = $topic->author?->name ?? 'Autor';
+            $topic->update([
+                'status' => 'HIDDEN',
+                'moderation_note' => 'Excluído pela Moderação: ' . $reason,
+            ]);
+            $topic->delete();
+        } elseif ($targetType === 'COMMENT') {
+            $comment = Comment::with('author')->findOrFail($targetId);
+            $targetTitle = 'Comentário #' . $comment->id . ': ' . Str::limit($comment->body, 90);
+            $targetAuthorName = $comment->author?->name ?? 'Autor';
+
+            if ($comment->work_id) {
+                Work::where('id', $comment->work_id)->where('reviews_count', '>', 0)->decrement('reviews_count');
+            }
+            if ($comment->topic_id) {
+                Topic::where('id', $comment->topic_id)->where('comments_count', '>', 0)->decrement('comments_count');
+            }
+
+            Comment::where('parent_id', $comment->id)->update(['status' => 'HIDDEN']);
+            Comment::where('parent_id', $comment->id)->delete();
+
+            $comment->update([
+                'status' => 'HIDDEN',
+                'moderation_note' => 'Excluído pela Moderação: ' . $reason,
+            ]);
+            $comment->delete();
+        }
+
+        ModerationFlag::where('target_type', $targetType)
+            ->where('target_id', $targetId)
+            ->where('status', 'PENDING')
+            ->update([
+                'status' => 'RESOLVED_HIDDEN',
+                'moderator_note' => 'Item excluído pela Moderação: ' . $reason,
+                'resolved_at' => now(),
+            ]);
+
+        $log = self::recordAuditLog(
+            $user,
+            'DELETE_' . $targetType,
+            $targetType,
+            $targetId,
+            $targetTitle,
+            $targetAuthorName,
+            $reason,
+            $request
+        );
+
+        return response()->json([
+            'deleted' => true,
+            'target_type' => $targetType,
+            'target_id' => $targetId,
+            'log' => $log,
+            'message' => 'Item excluído e registrado no Log de Auditoria da Moderação.',
+        ]);
     }
 }

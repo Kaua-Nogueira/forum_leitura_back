@@ -34,9 +34,10 @@ Route::post('/topics', [PlatformController::class, 'createTopic']);
 Route::post('/comments', [PlatformController::class, 'createComment']);
 Route::post('/upvotes', [PlatformController::class, 'toggleUpvote']);
 
-// Governança, Fila de Moderação & Tag Global de Afiliado Amazon
+// Governança, Fila de Moderação, Exclusão Auditada & Tag Global de Afiliado Amazon
 Route::post('/flags', [ModerationController::class, 'createFlag']);
 Route::post('/moderation/flags/{id}/resolve', [ModerationController::class, 'resolveFlag']);
 Route::post('/moderation/works/{id}/status', [ModerationController::class, 'moderateWork']);
 Route::post('/moderation/topics/{id}/status', [ModerationController::class, 'moderateTopic']);
+Route::post('/moderation/delete', [ModerationController::class, 'deleteItem']);
 Route::put('/moderation/settings', [ModerationController::class, 'updateSettings']);
