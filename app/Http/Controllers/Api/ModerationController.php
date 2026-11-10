@@ -155,4 +155,78 @@ class ModerationController extends Controller
 
         return response()->json(['settings' => $settings]);
     }
+
+    /**
+     * POST /api/moderation/works/{id}/status (RBAC: MODERATOR or ADMIN)
+     */
+    public function moderateWork(Request $request, int $id): JsonResponse
+    {
+        $user = $this->resolveCurrentUser($request);
+        if (!$user || !$user->hasRole('ADMIN', 'MODERATOR')) {
+            return response()->json([
+                'message' => 'Acesso negado (RBAC): apenas Moderadores e Administradores podem aprovar ou reprovar textos.',
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'status' => 'required|in:APPROVED,REJECTED,HIDDEN',
+            'moderation_note' => 'nullable|string',
+        ]);
+
+        $work = Work::findOrFail($id);
+        $work->update([
+            'status' => $validated['status'],
+            'moderation_note' => $validated['moderation_note'] ?? null,
+        ]);
+
+        ModerationFlag::where('target_type', 'WORK')
+            ->where('target_id', $work->id)
+            ->where('status', 'PENDING')
+            ->update([
+                'status' => $validated['status'] === 'APPROVED' ? 'RESOLVED_APPROVED' : 'RESOLVED_HIDDEN',
+                'moderator_note' => $validated['moderation_note'] ?? 'Revisado pela Moderação.',
+                'resolved_at' => now(),
+            ]);
+
+        $work->load(['category', 'submittedBy', 'comments']);
+
+        return response()->json(['work' => $work]);
+    }
+
+    /**
+     * POST /api/moderation/topics/{id}/status (RBAC: MODERATOR or ADMIN)
+     */
+    public function moderateTopic(Request $request, int $id): JsonResponse
+    {
+        $user = $this->resolveCurrentUser($request);
+        if (!$user || !$user->hasRole('ADMIN', 'MODERATOR')) {
+            return response()->json([
+                'message' => 'Acesso negado (RBAC): apenas Moderadores e Administradores podem aprovar ou reprovar ensaios.',
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'status' => 'required|in:APPROVED,REJECTED,HIDDEN',
+            'moderation_note' => 'nullable|string',
+        ]);
+
+        $topic = Topic::findOrFail($id);
+        $topic->update([
+            'status' => $validated['status'],
+            'moderation_note' => $validated['moderation_note'] ?? null,
+        ]);
+
+        ModerationFlag::where('target_type', 'TOPIC')
+            ->where('target_id', $topic->id)
+            ->where('status', 'PENDING')
+            ->update([
+                'status' => $validated['status'] === 'APPROVED' ? 'RESOLVED_APPROVED' : 'RESOLVED_HIDDEN',
+                'moderator_note' => $validated['moderation_note'] ?? 'Revisado pela Moderação.',
+                'resolved_at' => now(),
+            ]);
+
+        $topic->load(['category', 'work', 'author', 'comments']);
+
+        return response()->json(['topic' => $topic]);
+    }
 }

@@ -130,11 +130,23 @@ class PlatformController extends Controller
             'publisher_or_studio' => $validated['publisher_or_studio'] ?? 'Edição Recomendada',
             'is_featured' => $validated['is_featured'] ?? true,
             'editorial_rating' => 4.9,
-            'status' => 'APPROVED',
+            'status' => 'PENDING',
             'submitted_by_id' => $user->id,
         ]);
 
-        $flag = null;
+        $flag = ModerationFlag::create([
+            'target_type' => 'WORK',
+            'target_id' => $work->id,
+            'target_title' => 'Revisão de Nova Obra/Resenha: ' . $work->title,
+            'target_excerpt' => Str::limit($work->synopsis, 220),
+            'target_author_id' => $user->id,
+            'target_author_name' => $user->name,
+            'reporter_id' => $user->id,
+            'reporter_name' => 'Fila Obrigatória de Revisão Editorial',
+            'reason' => 'BROKEN_AFFILIATE_LINK',
+            'details' => 'Todo texto publicado aguarda revisão obrigatória da moderação antes de ir ao ar.',
+            'status' => 'PENDING',
+        ]);
 
         $work->load(['category', 'submittedBy', 'comments']);
 
@@ -189,12 +201,29 @@ class PlatformController extends Controller
             'work_id' => $validated['work_id'] ?? null,
             'author_id' => $user->id,
             'tags' => $validated['tags'] ?? ['Diálogo Clássico'],
-            'status' => 'APPROVED',
+            'status' => 'PENDING',
+        ]);
+
+        $flag = ModerationFlag::create([
+            'target_type' => 'TOPIC',
+            'target_id' => $topic->id,
+            'target_title' => 'Revisão de Novo Ensaio: ' . $topic->title,
+            'target_excerpt' => Str::limit($topic->body, 220),
+            'target_author_id' => $user->id,
+            'target_author_name' => $user->name,
+            'reporter_id' => $user->id,
+            'reporter_name' => 'Fila Obrigatória de Revisão Editorial',
+            'reason' => 'GUIDELINE_VIOLATION',
+            'details' => 'Todo ensaio publicado aguarda revisão obrigatória da moderação antes de ir ao ar.',
+            'status' => 'PENDING',
         ]);
 
         $topic->load(['category', 'work', 'author', 'comments']);
 
-        return response()->json(['topic' => $topic], 201);
+        return response()->json([
+            'topic' => $topic,
+            'flag' => $flag,
+        ], 201);
     }
 
     /**

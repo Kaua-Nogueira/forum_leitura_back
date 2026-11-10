@@ -55,6 +55,32 @@ class DatabaseSeeder extends Seeder
             ]
         );
 
+        User::updateOrCreate(
+            ['email' => 'mod@veritas.com'],
+            [
+                'name' => 'Moderador Editorial',
+                'username' => 'moderador.veritas',
+                'password' => Hash::make('123456'),
+                'role' => 'MODERATOR',
+                'title_badge' => 'Conselho de Moderação • Revisão Editorial',
+                'bio' => 'Responsável pela revisão e aprovação das resenhas e ensaios submetidos pelos membros.',
+                'reputation_score' => 1100,
+            ]
+        );
+
+        User::updateOrCreate(
+            ['email' => 'admin@veritas.com'],
+            [
+                'name' => 'Administrador Geral',
+                'username' => 'admin.veritas',
+                'password' => Hash::make('123456'),
+                'role' => 'ADMIN',
+                'title_badge' => 'Administrador & Editor-Chefe',
+                'bio' => 'Gestão de papéis RBAC, curadoria e configurações globais.',
+                'reputation_score' => 1500,
+            ]
+        );
+
         $member = User::updateOrCreate(
             ['email' => 'lucas@leitor.org'],
             [
