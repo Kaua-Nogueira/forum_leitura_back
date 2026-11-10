@@ -68,35 +68,71 @@ class ModerationController extends Controller
     }
 
     /**
-     * POST /api/flags (RBAC: MEMBER, MODERATOR, ADMIN)
+     * POST /api/flags (Aberto a todos os leitores: Visitantes, Membros, Moderadores e Admins)
      */
     public function createFlag(Request $request): JsonResponse
     {
         $user = $this->resolveCurrentUser($request);
-        if (!$user) {
-            return response()->json(['message' => 'Faça login para sinalizar conteúdos à moderação.'], 401);
-        }
 
         $validated = $request->validate([
             'target_type' => 'required|in:WORK,TOPIC,COMMENT',
             'target_id' => 'required|integer',
             'target_title' => 'required|string|max:255',
-            'target_excerpt' => 'required|string',
+            'target_excerpt' => 'nullable|string',
+            'target_author_name' => 'nullable|string|max:255',
             'reason' => 'required|string|max:40',
-            'details' => 'required|string',
+            'details' => 'nullable|string',
         ]);
+
+        $targetAuthorId = null;
+        $targetAuthorName = $validated['target_author_name'] ?? null;
+
+        if ($validated['target_type'] === 'WORK') {
+            $work = Work::with('submittedBy')->find($validated['target_id']);
+            if ($work) {
+                $targetAuthorId = $work->submitted_by_id;
+                $targetAuthorName = $targetAuthorName ?: ($work->submittedBy?->name ?? $work->creator ?? 'Autor da Obra');
+            }
+        } elseif ($validated['target_type'] === 'TOPIC') {
+            $topic = Topic::with('author')->find($validated['target_id']);
+            if ($topic) {
+                $targetAuthorId = $topic->author_id;
+                $targetAuthorName = $targetAuthorName ?: ($topic->author?->name ?? 'Autor do Ensaio');
+            }
+        } elseif ($validated['target_type'] === 'COMMENT') {
+            $comment = Comment::with('author')->find($validated['target_id']);
+            if ($comment) {
+                $targetAuthorId = $comment->author_id;
+                $targetAuthorName = $targetAuthorName ?: ($comment->author?->name ?? 'Autor do Comentário');
+            }
+        }
+
+        if (empty($targetAuthorName)) {
+            $targetAuthorName = 'Autor Sinalizado';
+        }
+
+        $excerpt = !empty($validated['target_excerpt'])
+            ? $validated['target_excerpt']
+            : Str::limit($validated['target_title'], 180);
+
+        $details = !empty($validated['details'])
+            ? $validated['details']
+            : 'Conteúdo impróprio ou ofensivo sinalizado para análise da moderação.';
+
+        $reporterId = $user ? $user->id : null;
+        $reporterName = $user ? $user->name : 'Visitante / Leitor Anônimo';
 
         $flag = ModerationFlag::create([
             'target_type' => $validated['target_type'],
             'target_id' => $validated['target_id'],
             'target_title' => $validated['target_title'],
-            'target_excerpt' => $validated['target_excerpt'],
-            'target_author_id' => null,
-            'target_author_name' => 'Membro Sinalizado',
-            'reporter_id' => $user->id,
-            'reporter_name' => $user->name,
+            'target_excerpt' => $excerpt,
+            'target_author_id' => $targetAuthorId,
+            'target_author_name' => $targetAuthorName,
+            'reporter_id' => $reporterId,
+            'reporter_name' => $reporterName,
             'reason' => $validated['reason'],
-            'details' => $validated['details'],
+            'details' => $details,
             'status' => 'PENDING',
         ]);
 
