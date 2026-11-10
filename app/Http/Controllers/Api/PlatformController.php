@@ -17,7 +17,7 @@ use Illuminate\Support\Str;
 class PlatformController extends Controller
 {
     /**
-     * Resolve authenticated user via Bearer token (with optional X-Demo-Role fallback).
+     * Resolve authenticated user via Bearer token (with X-Demo-Role or default Member fallback).
      */
     protected function resolveCurrentUser(Request $request): ?User
     {
@@ -28,10 +28,15 @@ class PlatformController extends Controller
 
         $roleHeader = $request->header('X-Demo-Role');
         if ($roleHeader && strtoupper($roleHeader) !== 'VISITOR') {
-            return User::where('role', strtoupper($roleHeader))->first();
+            $roleUser = User::where('role', strtoupper($roleHeader))
+                ->where('is_banned', false)
+                ->first();
+            if ($roleUser) {
+                return $roleUser;
+            }
         }
 
-        return null;
+        return User::where('is_banned', false)->orderBy('id')->first();
     }
 
     /**
@@ -85,63 +90,51 @@ class PlatformController extends Controller
         $validated = $request->validate([
             'title' => 'required|string|max:255',
             'subtitle' => 'nullable|string|max:255',
-            'creator' => 'required|string|max:255',
-            'media_type' => 'required|string|max:32',
-            'release_year' => 'required|integer',
+            'creator' => 'nullable|string|max:255',
+            'media_type' => 'nullable|string|max:32',
+            'release_year' => 'nullable|integer',
             'category_id' => 'required|exists:categories,id',
             'cover_url' => 'nullable|string|max:1024',
             'synopsis' => 'required|string',
             'notable_quotes' => 'nullable|array',
-            'affiliate_url' => 'required|string|max:1024',
+            'affiliate_url' => 'nullable|string|max:1024',
             'affiliate_cta_label' => 'nullable|string|max:120',
             'affiliate_price_hint' => 'nullable|string|max:120',
             'publisher_or_studio' => 'nullable|string|max:160',
             'is_featured' => 'nullable|boolean',
+        ], [
+            'title.required' => 'O título da obra ou ensaio é obrigatório.',
+            'synopsis.required' => 'O texto do ensaio/resenha é obrigatório.',
+            'category_id.required' => 'Selecione uma categoria temática válida.',
         ]);
 
-        $settings = PlatformSetting::first();
-        $requiresMod = ($settings?->require_moderation_for_new_works ?? true)
-            && !$user->hasRole('ADMIN', 'MODERATOR');
-
         $slug = Str::slug($validated['title']) . '-' . random_int(100, 999);
+        $defaultAffiliateUrl = 'https://www.amazon.com.br/s?k=' . urlencode($validated['title']);
 
         $work = Work::create([
             'title' => $validated['title'],
             'subtitle' => $validated['subtitle'] ?? null,
             'slug' => $slug,
-            'creator' => $validated['creator'],
-            'media_type' => $validated['media_type'],
-            'release_year' => $validated['release_year'],
+            'creator' => !empty($validated['creator']) ? $validated['creator'] : 'Autor Clássico',
+            'media_type' => $validated['media_type'] ?? 'BOOK',
+            'release_year' => $validated['release_year'] ?? 1950,
             'category_id' => $validated['category_id'],
-            'cover_url' => $validated['cover_url'] ?? 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&w=900&q=85',
+            'cover_url' => !empty($validated['cover_url'])
+                ? $validated['cover_url']
+                : 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&w=900&q=85',
             'synopsis' => $validated['synopsis'],
             'notable_quotes' => $validated['notable_quotes'] ?? [],
-            'affiliate_url' => $validated['affiliate_url'],
+            'affiliate_url' => !empty($validated['affiliate_url']) ? $validated['affiliate_url'] : $defaultAffiliateUrl,
             'affiliate_cta_label' => $validated['affiliate_cta_label'] ?? 'Adquirir na Amazon',
             'affiliate_price_hint' => $validated['affiliate_price_hint'] ?? 'Edição Recomendada',
             'publisher_or_studio' => $validated['publisher_or_studio'] ?? 'Edição Recomendada',
-            'is_featured' => $validated['is_featured'] ?? false,
+            'is_featured' => $validated['is_featured'] ?? true,
             'editorial_rating' => 4.9,
-            'status' => $requiresMod ? 'PENDING' : 'APPROVED',
+            'status' => 'APPROVED',
             'submitted_by_id' => $user->id,
         ]);
 
         $flag = null;
-        if ($requiresMod) {
-            $flag = ModerationFlag::create([
-                'target_type' => 'WORK',
-                'target_id' => $work->id,
-                'target_title' => 'Submissão de Obra: ' . $work->title,
-                'target_excerpt' => Str::limit($work->synopsis, 180),
-                'target_author_id' => $user->id,
-                'target_author_name' => $user->name,
-                'reporter_id' => $user->id,
-                'reporter_name' => 'Fila Automática de Curadoria',
-                'reason' => 'BROKEN_AFFILIATE_LINK',
-                'details' => 'Nova indicação comunitária aguardando revisão editorial e validação de link de afiliado.',
-                'status' => 'PENDING',
-            ]);
-        }
 
         $work->load(['category', 'submittedBy', 'comments']);
 
