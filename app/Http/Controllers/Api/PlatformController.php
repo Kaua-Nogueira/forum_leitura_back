@@ -93,38 +93,6 @@ class PlatformController extends Controller
             }
         }
 
-        if (ModerationFlag::count() === 0) {
-            ModerationFlag::create([
-                'target_type' => 'WORK',
-                'target_id' => 4,
-                'target_title' => 'Verificação de Edição & Link de Afiliado: Ortodoxia (G. K. Chesterton)',
-                'target_excerpt' => 'Solicitação de revisão do link da edição de capa dura e nota bibliográfica da tradução.',
-                'target_author_id' => 3,
-                'target_author_name' => 'Lucas Albuquerque',
-                'reporter_id' => 2,
-                'reporter_name' => 'Helena Monteiro de Barros',
-                'reason' => 'BROKEN_AFFILIATE_LINK',
-                'details' => 'Conferir se a tag global de associado Amazon está aplicada ao ASIN da edição recomendada.',
-                'status' => 'PENDING',
-            ]);
-
-            ModerationFlag::create([
-                'target_type' => 'TOPIC',
-                'target_id' => 2,
-                'target_title' => 'Revisão Editorial Concluída: Ordo Amoris e a Educação da Imaginação Moral',
-                'target_excerpt' => 'Guia prático de transição para famílias e tutores: como harmonizar a leitura de livros vivos com o Trivium.',
-                'target_author_id' => 2,
-                'target_author_name' => 'Helena Monteiro de Barros',
-                'reporter_id' => 1,
-                'reporter_name' => 'Fila Obrigatória de Revisão Editorial',
-                'reason' => 'GUIDELINE_VIOLATION',
-                'details' => 'Revisão inicial obrigatória concluída pelo Conselho Editorial.',
-                'status' => 'RESOLVED_APPROVED',
-                'moderator_note' => 'Ensaio aprovado em conformidade com a Carta de Princípios.',
-                'resolved_at' => now(),
-            ]);
-        }
-
         $flags = ModerationFlag::latest()->get();
 
         $settings = PlatformSetting::first() ?? PlatformSetting::create([
@@ -135,36 +103,6 @@ class PlatformController extends Controller
         ]);
 
         $users = User::orderBy('id')->get();
-
-        if (ModerationLog::count() === 0) {
-            $modUser = User::whereIn('role', ['MODERATOR', 'ADMIN'])->orderBy('id')->first();
-            if ($modUser) {
-                ModerationLog::create([
-                    'actor_id' => $modUser->id,
-                    'actor_name' => $modUser->name,
-                    'actor_role' => $modUser->role,
-                    'action_type' => 'APPROVE_WORK',
-                    'target_type' => 'WORK',
-                    'target_id' => 1,
-                    'target_title' => 'Confissões (Santo Agostinho)',
-                    'target_author_name' => 'Prof. Augusto Vasconcelos',
-                    'reason' => 'Revisão editorial inicial concluída: tradução e aparato crítico verificados.',
-                    'ip_address' => '127.0.0.1',
-                ]);
-                ModerationLog::create([
-                    'actor_id' => $modUser->id,
-                    'actor_name' => $modUser->name,
-                    'actor_role' => $modUser->role,
-                    'action_type' => 'APPROVE_TOPIC',
-                    'target_type' => 'TOPIC',
-                    'target_id' => 1,
-                    'target_title' => 'A Ordem do Amor (Ordo Amoris) em Santo Agostinho',
-                    'target_author_name' => 'Prof. Augusto Vasconcelos',
-                    'reason' => 'Ensaio aprovado pelo Conselho Editorial para abertura da cátedra Letras & Teologia.',
-                    'ip_address' => '127.0.0.1',
-                ]);
-            }
-        }
 
         $moderationLogs = ModerationLog::latest()->limit(250)->get();
         $upvotes = Upvote::select(['user_id', 'target_type', 'target_id'])->get();
