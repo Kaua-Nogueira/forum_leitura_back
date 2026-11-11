@@ -15,12 +15,12 @@ use Illuminate\Support\Facades\Route;
 Route::post('/auth/login', [AuthController::class, 'login']);
 Route::post('/auth/register', [AuthController::class, 'register']);
 Route::get('/auth/me', [AuthController::class, 'me']);
-Route::put('/auth/profile', [AuthController::class, 'updateProfile']);
+Route::match(['PUT', 'POST', 'PATCH'], '/auth/profile', [AuthController::class, 'updateProfile']);
 Route::post('/auth/logout', [AuthController::class, 'logout']);
 
 // Gestão de Usuários e Papéis RBAC (ADMIN / MODERATOR)
 Route::get('/users', [AuthController::class, 'listUsers']);
-Route::patch('/users/{id}/role', [AuthController::class, 'updateUserRole']);
+Route::match(['PATCH', 'POST', 'PUT'], '/users/{id}/role', [AuthController::class, 'updateUserRole']);
 
 // Dados Iniciais do Acervo & Fórum
 Route::get('/bootstrap', [PlatformController::class, 'bootstrap']);
