@@ -8,6 +8,7 @@ use App\Models\ModerationFlag;
 use App\Models\ModerationLog;
 use App\Models\PlatformSetting;
 use App\Models\Topic;
+use App\Models\Upvote;
 use App\Models\User;
 use App\Models\Work;
 use Illuminate\Http\JsonResponse;
@@ -343,54 +344,64 @@ class ModerationController extends Controller
     }
 
     /**
-     * POST /api/moderation/delete (RBAC: MODERATOR or ADMIN)
-     * Moderators can delete ANY item (WORK, TOPIC, or COMMENT), and every deletion is recorded in moderation_logs.
+     * POST /api/moderation/delete
+     * Allows authors to delete their own content (WORK, TOPIC, COMMENT)
+     * and Moderators/Admins to delete any content.
      */
     public function deleteItem(Request $request): JsonResponse
     {
         $user = $this->resolveCurrentUser($request);
-        if (!$user || !$user->hasRole('ADMIN', 'MODERATOR')) {
+        if (!$user) {
             return response()->json([
-                'message' => 'Acesso negado (RBAC): apenas Moderadores e Administradores podem excluir conteúdos.',
-            ], 403);
+                'message' => 'Faça login para realizar esta ação.',
+            ], 401);
         }
 
         $validated = $request->validate([
             'target_type' => 'required|in:WORK,TOPIC,COMMENT',
             'target_id' => 'required|integer',
-            'reason' => 'required|string|min:3|max:500',
-        ], [
-            'reason.required' => 'Informe a justificativa da exclusão para registro no log de auditoria.',
-            'reason.min' => 'A justificativa da exclusão deve ter pelo menos 3 caracteres.',
+            'reason' => 'nullable|string|max:500',
         ]);
 
         $targetType = $validated['target_type'];
         $targetId = (int) $validated['target_id'];
-        $reason = $validated['reason'];
 
         $targetTitle = '';
         $targetAuthorName = 'Membro da Comunidade';
+        $isAuthor = false;
 
         if ($targetType === 'WORK') {
             $work = Work::with('submittedBy')->findOrFail($targetId);
+            $isAuthor = ($work->submitted_by_id === $user->id);
+            if (!$user->hasRole('ADMIN', 'MODERATOR') && !$isAuthor) {
+                return response()->json([
+                    'message' => 'Você não tem permissão para excluir esta publicação.',
+                ], 403);
+            }
             $targetTitle = $work->title;
             $targetAuthorName = $work->submittedBy?->name ?? $work->creator ?? 'Autor';
-            $work->update([
-                'status' => 'HIDDEN',
-                'moderation_note' => 'Excluído pela Moderação: ' . $reason,
-            ]);
-            $work->delete();
+            Comment::where('work_id', $work->id)->forceDelete();
+            $work->forceDelete();
         } elseif ($targetType === 'TOPIC') {
             $topic = Topic::with('author')->findOrFail($targetId);
+            $isAuthor = ($topic->author_id === $user->id);
+            if (!$user->hasRole('ADMIN', 'MODERATOR') && !$isAuthor) {
+                return response()->json([
+                    'message' => 'Você não tem permissão para excluir este ensaio.',
+                ], 403);
+            }
             $targetTitle = $topic->title;
             $targetAuthorName = $topic->author?->name ?? 'Autor';
-            $topic->update([
-                'status' => 'HIDDEN',
-                'moderation_note' => 'Excluído pela Moderação: ' . $reason,
-            ]);
-            $topic->delete();
+            Comment::where('topic_id', $topic->id)->forceDelete();
+            $topic->forceDelete();
         } elseif ($targetType === 'COMMENT') {
             $comment = Comment::with('author')->findOrFail($targetId);
+            $isAuthor = ($comment->author_id === $user->id);
+            if (!$user->hasRole('ADMIN', 'MODERATOR') && !$isAuthor) {
+                return response()->json([
+                    'message' => 'Você não tem permissão para excluir este comentário.',
+                ], 403);
+            }
             $targetTitle = 'Comentário #' . $comment->id . ': ' . Str::limit($comment->body, 90);
             $targetAuthorName = $comment->author?->name ?? 'Autor';
 
@@ -401,24 +412,21 @@ class ModerationController extends Controller
                 Topic::where('id', $comment->topic_id)->where('comments_count', '>', 0)->decrement('comments_count');
             }
 
-            Comment::where('parent_id', $comment->id)->update(['status' => 'HIDDEN']);
-            Comment::where('parent_id', $comment->id)->delete();
-
-            $comment->update([
-                'status' => 'HIDDEN',
-                'moderation_note' => 'Excluído pela Moderação: ' . $reason,
-            ]);
-            $comment->delete();
+            Comment::where('parent_id', $comment->id)->forceDelete();
+            $comment->forceDelete();
         }
+
+        $reason = !empty($validated['reason'])
+            ? $validated['reason']
+            : ($isAuthor ? 'Excluído pelo próprio autor.' : 'Excluído pela Moderação.');
 
         ModerationFlag::where('target_type', $targetType)
             ->where('target_id', $targetId)
-            ->where('status', 'PENDING')
-            ->update([
-                'status' => 'RESOLVED_HIDDEN',
-                'moderator_note' => 'Item excluído pela Moderação: ' . $reason,
-                'resolved_at' => now(),
-            ]);
+            ->delete();
+
+        Upvote::where('target_type', $targetType)
+            ->where('target_id', $targetId)
+            ->delete();
 
         $log = self::recordAuditLog(
             $user,
@@ -436,7 +444,7 @@ class ModerationController extends Controller
             'target_type' => $targetType,
             'target_id' => $targetId,
             'log' => $log,
-            'message' => 'Item excluído e registrado no Log de Auditoria da Moderação.',
+            'message' => 'Conteúdo excluído com sucesso.',
         ]);
     }
 }

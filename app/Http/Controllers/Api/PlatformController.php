@@ -335,13 +335,40 @@ class PlatformController extends Controller
         $alreadyLiked = Upvote::where('user_id', $user->id)
             ->where('target_type', $validated['target_type'])
             ->where('target_id', $validated['target_id'])
-            ->exists();
+            ->first();
 
         if ($alreadyLiked) {
+            $alreadyLiked->delete();
+
+            if ($validated['target_type'] === 'TOPIC') {
+                $topic = Topic::find($validated['target_id']);
+                if ($topic && $topic->upvotes_count > 0) {
+                    $topic->decrement('upvotes_count');
+                }
+                return response()->json([
+                    'upvotes_count' => $topic ? $topic->upvotes_count : 0,
+                    'already_upvoted' => false,
+                    'unliked' => true,
+                ]);
+            }
+
+            if ($validated['target_type'] === 'COMMENT') {
+                $comment = Comment::find($validated['target_id']);
+                if ($comment && $comment->upvotes_count > 0) {
+                    $comment->decrement('upvotes_count');
+                }
+                return response()->json([
+                    'upvotes_count' => $comment ? $comment->upvotes_count : 0,
+                    'already_upvoted' => false,
+                    'unliked' => true,
+                ]);
+            }
+
             return response()->json([
-                'message' => 'Você já deu curtida neste item. Cada usuário só pode curtir uma única vez.',
-                'already_upvoted' => true,
-            ], 409);
+                'upvotes_count' => 0,
+                'already_upvoted' => false,
+                'unliked' => true,
+            ]);
         }
 
         Upvote::create([
