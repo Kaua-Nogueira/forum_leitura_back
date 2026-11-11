@@ -12,13 +12,36 @@ use Illuminate\Support\Str;
 class AuthController extends Controller
 {
     /**
-     * Resolve authenticated user from Bearer token.
+     * Resolve authenticated user from Bearer token, X-User-Id, or X-Demo-Role.
      */
     public static function resolveUserFromRequest(Request $request): ?User
     {
         $bearer = $request->bearerToken();
         if ($bearer) {
-            return User::where('api_token', $bearer)->first();
+            $user = User::where('api_token', $bearer)->first();
+            if ($user) {
+                return $user;
+            }
+        }
+
+        $userIdHeader = $request->header('X-User-Id');
+        if ($userIdHeader && is_numeric($userIdHeader)) {
+            $idUser = User::where('id', (int) $userIdHeader)
+                ->where('is_banned', false)
+                ->first();
+            if ($idUser) {
+                return $idUser;
+            }
+        }
+
+        $roleHeader = $request->header('X-Demo-Role');
+        if ($roleHeader && strtoupper($roleHeader) !== 'VISITOR') {
+            $roleUser = User::where('role', strtoupper($roleHeader))
+                ->where('is_banned', false)
+                ->first();
+            if ($roleUser) {
+                return $roleUser;
+            }
         }
 
         return null;
