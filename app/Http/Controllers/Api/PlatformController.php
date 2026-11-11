@@ -19,37 +19,16 @@ use Illuminate\Support\Str;
 class PlatformController extends Controller
 {
     /**
-     * Resolve authenticated user via Bearer token or X-User-Id.
+     * Resolve authenticated user via Bearer token, X-User-Id, X-User-Email, or request payload.
      * Unauthenticated visitors (VISITOR) always resolve to null.
      */
     protected function resolveCurrentUser(Request $request): ?User
     {
-        $bearerUser = AuthController::resolveUserFromRequest($request);
-        if ($bearerUser) {
-            return $bearerUser->is_banned ? null : $bearerUser;
+        $user = AuthController::resolveUserFromRequest($request);
+        if ($user && $user->is_banned) {
+            return null;
         }
-
-        $userIdHeader = $request->header('X-User-Id');
-        if ($userIdHeader && is_numeric($userIdHeader)) {
-            $idUser = User::where('id', (int) $userIdHeader)
-                ->where('is_banned', false)
-                ->first();
-            if ($idUser) {
-                return $idUser;
-            }
-        }
-
-        $roleHeader = $request->header('X-Demo-Role');
-        if ($roleHeader && strtoupper($roleHeader) !== 'VISITOR') {
-            $roleUser = User::where('role', strtoupper($roleHeader))
-                ->where('is_banned', false)
-                ->first();
-            if ($roleUser) {
-                return $roleUser;
-            }
-        }
-
-        return null;
+        return $user;
     }
 
     /**
@@ -60,11 +39,11 @@ class PlatformController extends Controller
     {
         $categories = Category::withCount(['works', 'topics'])->orderBy('id')->get();
 
-        $works = Work::with(['category', 'submittedBy', 'comments'])
+        $works = Work::with(['category', 'submittedBy', 'comments.author', 'comments.replies.author'])
             ->latest()
             ->get();
 
-        $topics = Topic::with(['category', 'work', 'author', 'comments'])
+        $topics = Topic::with(['category', 'work', 'author', 'comments.author', 'comments.replies.author'])
             ->orderByDesc('is_pinned')
             ->latest()
             ->get();
@@ -276,7 +255,7 @@ class PlatformController extends Controller
             'status' => 'PENDING',
         ]);
 
-        $work->load(['category', 'submittedBy', 'comments']);
+        $work->load(['category', 'submittedBy', 'comments.author', 'comments.replies.author']);
 
         return response()->json([
             'work' => $work,
@@ -346,7 +325,7 @@ class PlatformController extends Controller
             'status' => 'PENDING',
         ]);
 
-        $topic->load(['category', 'work', 'author', 'comments']);
+        $topic->load(['category', 'work', 'author', 'comments.author', 'comments.replies.author']);
 
         return response()->json([
             'topic' => $topic,
@@ -393,7 +372,7 @@ class PlatformController extends Controller
             Topic::where('id', $validated['topic_id'])->increment('comments_count');
         }
 
-        $comment->load(['author', 'replies']);
+        $comment->load(['author', 'replies.author']);
 
         return response()->json(['comment' => $comment], 201);
     }

@@ -18,29 +18,11 @@ class ModerationController extends Controller
 {
     protected function resolveCurrentUser(Request $request): ?User
     {
-        $bearerUser = AuthController::resolveUserFromRequest($request);
-        if ($bearerUser) {
-            return $bearerUser->is_banned ? null : $bearerUser;
+        $user = AuthController::resolveUserFromRequest($request);
+        if ($user && $user->is_banned) {
+            return null;
         }
-
-        $userIdHeader = $request->header('X-User-Id');
-        if ($userIdHeader && is_numeric($userIdHeader)) {
-            $idUser = User::where('id', (int) $userIdHeader)
-                ->where('is_banned', false)
-                ->first();
-            if ($idUser) {
-                return $idUser;
-            }
-        }
-
-        $roleHeader = $request->header('X-Demo-Role');
-        if ($roleHeader && strtoupper($roleHeader) !== 'VISITOR') {
-            return User::where('role', strtoupper($roleHeader))
-                ->where('is_banned', false)
-                ->first();
-        }
-
-        return null;
+        return $user;
     }
 
     public static function recordAuditLog(

@@ -12,21 +12,24 @@ use Illuminate\Support\Str;
 class AuthController extends Controller
 {
     /**
-     * Resolve authenticated user from Bearer token, X-User-Id, or X-Demo-Role.
+     * Resolve authenticated user from Bearer token, X-User-Id/email headers or request body.
+     * Never falls back to role search, preventing account impersonation.
      */
     public static function resolveUserFromRequest(Request $request): ?User
     {
+        // 1. Bearer Token
         $bearer = $request->bearerToken();
         if ($bearer) {
             $user = User::where('api_token', $bearer)->first();
-            if ($user) {
+            if ($user && !$user->is_banned) {
                 return $user;
             }
         }
 
-        $userIdHeader = $request->header('X-User-Id');
-        if ($userIdHeader && is_numeric($userIdHeader)) {
-            $idUser = User::where('id', (int) $userIdHeader)
+        // 2. User ID from headers or request payload
+        $userId = $request->header('X-User-Id') ?? $request->input('user_id') ?? $request->input('author_id') ?? $request->input('submitted_by_id');
+        if ($userId && is_numeric($userId)) {
+            $idUser = User::where('id', (int) $userId)
                 ->where('is_banned', false)
                 ->first();
             if ($idUser) {
@@ -34,13 +37,14 @@ class AuthController extends Controller
             }
         }
 
-        $roleHeader = $request->header('X-Demo-Role');
-        if ($roleHeader && strtoupper($roleHeader) !== 'VISITOR') {
-            $roleUser = User::where('role', strtoupper($roleHeader))
+        // 3. User Email from headers or request payload
+        $email = $request->header('X-User-Email') ?? $request->input('email') ?? $request->input('author_email');
+        if ($email && is_string($email) && strlen(trim($email)) > 0) {
+            $emailUser = User::where('email', trim($email))
                 ->where('is_banned', false)
                 ->first();
-            if ($roleUser) {
-                return $roleUser;
+            if ($emailUser) {
+                return $emailUser;
             }
         }
 
@@ -253,26 +257,7 @@ class AuthController extends Controller
         $user = self::resolveUserFromRequest($request);
 
         if (!$user) {
-            $userId = $request->header('X-User-Id') ?? $request->input('user_id');
-            if ($userId && is_numeric($userId)) {
-                $user = User::find((int) $userId);
-            }
-        }
-
-        if (!$user) {
-            $email = $request->header('X-User-Email') ?? $request->input('email');
-            if ($email) {
-                $user = User::where('email', $email)->first();
-            }
-        }
-
-        if (!$user) {
-            $roleHeader = $request->header('X-Demo-Role');
-            if ($roleHeader && strtoupper($roleHeader) !== 'VISITOR') {
-                $user = User::where('role', strtoupper($roleHeader))
-                    ->where('is_banned', false)
-                    ->first();
-            }
+            $user = self::resolveUserFromRequest($request);
         }
 
         if (!$user) {
