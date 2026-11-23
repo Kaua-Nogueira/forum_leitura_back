@@ -256,13 +256,26 @@ class ModerationController extends Controller
         $validated = $request->validate([
             'status' => 'required|in:APPROVED,REJECTED,HIDDEN',
             'moderation_note' => 'nullable|string',
+            'affiliate_url' => 'nullable|string|max:1024',
+            'affiliate_cta_label' => 'nullable|string|max:120',
+            'affiliate_price_hint' => 'nullable|string|max:120',
         ]);
 
         $work = Work::with('submittedBy')->findOrFail($id);
-        $work->update([
+        $updatePayload = [
             'status' => $validated['status'],
             'moderation_note' => $validated['moderation_note'] ?? null,
-        ]);
+        ];
+        if (array_key_exists('affiliate_url', $validated)) {
+            $updatePayload['affiliate_url'] = trim((string) ($validated['affiliate_url'] ?? ''));
+        }
+        if (!empty($validated['affiliate_cta_label'])) {
+            $updatePayload['affiliate_cta_label'] = trim($validated['affiliate_cta_label']);
+        }
+        if (array_key_exists('affiliate_price_hint', $validated) && $validated['affiliate_price_hint'] !== null) {
+            $updatePayload['affiliate_price_hint'] = trim($validated['affiliate_price_hint']);
+        }
+        $work->update($updatePayload);
 
         ModerationFlag::where('target_type', 'WORK')
             ->where('target_id', $work->id)
@@ -289,6 +302,56 @@ class ModerationController extends Controller
         return response()->json([
             'work' => $work,
             'log' => $log,
+        ]);
+    }
+
+    /**
+     * PATCH/PUT /api/moderation/works/{id}/affiliate (RBAC: MODERATOR or ADMIN)
+     * Allows moderators/admins to set or update the Amazon affiliate link of a work.
+     */
+    public function updateWorkAffiliate(Request $request, int $id): JsonResponse
+    {
+        $user = $this->resolveCurrentUser($request);
+        if (!$user || !$user->hasRole('ADMIN', 'MODERATOR')) {
+            return response()->json([
+                'message' => 'Acesso negado (RBAC): apenas Moderadores e Administradores podem definir ou alterar links de afiliado.',
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'affiliate_url' => 'nullable|string|max:1024',
+            'affiliate_cta_label' => 'nullable|string|max:120',
+            'affiliate_price_hint' => 'nullable|string|max:120',
+        ]);
+
+        $work = Work::with('submittedBy')->findOrFail($id);
+        $work->update([
+            'affiliate_url' => trim((string) ($validated['affiliate_url'] ?? '')),
+            'affiliate_cta_label' => !empty($validated['affiliate_cta_label'])
+                ? trim($validated['affiliate_cta_label'])
+                : ($work->affiliate_cta_label ?: 'Adquirir na Amazon'),
+            'affiliate_price_hint' => array_key_exists('affiliate_price_hint', $validated) && $validated['affiliate_price_hint'] !== null
+                ? trim($validated['affiliate_price_hint'])
+                : ($work->affiliate_price_hint ?: 'Edição Recomendada'),
+        ]);
+
+        $log = self::recordAuditLog(
+            $user,
+            'UPDATE_AFFILIATE_LINK',
+            'WORK',
+            $work->id,
+            $work->title,
+            $work->submittedBy?->name ?? 'Autor Comunitário',
+            $work->affiliate_url ? 'Link de afiliado definido pela Moderação.' : 'Link de afiliado removido pela Moderação.',
+            $request
+        );
+
+        $work->load(['category', 'submittedBy', 'comments']);
+
+        return response()->json([
+            'work' => $work,
+            'log' => $log,
+            'message' => 'Link de afiliado atualizado pela Moderação.',
         ]);
     }
 

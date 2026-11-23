@@ -27,10 +27,12 @@ Route::get('/bootstrap', [PlatformController::class, 'bootstrap']);
 
 // Catálogo Curado de Obras & Afiliados
 Route::post('/works', [PlatformController::class, 'createWork']);
+Route::match(['PUT', 'PATCH'], '/works/{id}', [PlatformController::class, 'updateWork']);
 Route::post('/works/{id}/affiliate-click', [PlatformController::class, 'trackAffiliateClick']);
 
 // Fórum de Discussão Comunitária & Resenhas Aninhadas
 Route::post('/topics', [PlatformController::class, 'createTopic']);
+Route::match(['PUT', 'PATCH'], '/topics/{id}', [PlatformController::class, 'updateTopic']);
 Route::post('/comments', [PlatformController::class, 'createComment']);
 Route::post('/upvotes', [PlatformController::class, 'toggleUpvote']);
 
@@ -38,6 +40,7 @@ Route::post('/upvotes', [PlatformController::class, 'toggleUpvote']);
 Route::post('/flags', [ModerationController::class, 'createFlag']);
 Route::post('/moderation/flags/{id}/resolve', [ModerationController::class, 'resolveFlag']);
 Route::post('/moderation/works/{id}/status', [ModerationController::class, 'moderateWork']);
+Route::match(['PATCH', 'PUT', 'POST'], '/moderation/works/{id}/affiliate', [ModerationController::class, 'updateWorkAffiliate']);
 Route::post('/moderation/topics/{id}/status', [ModerationController::class, 'moderateTopic']);
 Route::post('/moderation/delete', [ModerationController::class, 'deleteItem']);
 Route::put('/moderation/settings', [ModerationController::class, 'updateSettings']);

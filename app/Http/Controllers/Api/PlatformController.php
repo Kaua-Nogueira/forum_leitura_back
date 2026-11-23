@@ -34,66 +34,98 @@ class PlatformController extends Controller
     /**
      * GET /api/bootstrap
      * Returns full decoupled initial dataset for the React SPA.
+     * Unapproved works/topics (PENDING, REJECTED, HIDDEN) are ONLY returned to MODERATOR and ADMIN users.
      */
-    public function bootstrap(): JsonResponse
+    public function bootstrap(Request $request): JsonResponse
     {
-        $categories = Category::withCount(['works', 'topics'])->orderBy('id')->get();
+        $currentUser = $this->resolveCurrentUser($request);
+        $isModerator = $currentUser && $currentUser->hasRole('ADMIN', 'MODERATOR');
 
-        $works = Work::with(['category', 'submittedBy', 'comments.author', 'comments.replies.author'])
-            ->latest()
-            ->get();
+        $categories = Category::withCount([
+            'works' => fn ($q) => $q->where('status', 'APPROVED'),
+            'topics' => fn ($q) => $q->where('status', 'APPROVED'),
+        ])->orderBy('id')->get();
 
-        $topics = Topic::with(['category', 'work', 'author', 'comments.author', 'comments.replies.author'])
-            ->orderByDesc('is_pinned')
-            ->latest()
-            ->get();
+        $worksQuery = Work::with([
+            'category',
+            'submittedBy',
+            'comments' => fn ($q) => $isModerator ? $q->with(['author', 'replies.author']) : $q->where('status', 'APPROVED')->with(['author', 'replies' => fn ($rq) => $rq->where('status', 'APPROVED')->with('author')]),
+        ])->latest();
 
-        // Garante que qualquer Obra ou Ensaio com status PENDING possua item correspondente na fila de moderação
-        foreach ($works as $w) {
-            if ($w->status === 'PENDING') {
-                ModerationFlag::firstOrCreate(
-                    [
-                        'target_type' => 'WORK',
-                        'target_id' => $w->id,
-                        'status' => 'PENDING',
-                    ],
-                    [
-                        'target_title' => 'Revisão de Nova Obra/Resenha: ' . $w->title,
-                        'target_excerpt' => Str::limit($w->synopsis, 220),
-                        'target_author_id' => $w->submitted_by_id,
-                        'target_author_name' => $w->submittedBy?->name ?? $w->creator ?? 'Membro',
-                        'reporter_id' => $w->submitted_by_id,
-                        'reporter_name' => 'Fila Obrigatória de Revisão Editorial',
-                        'reason' => 'BROKEN_AFFILIATE_LINK',
-                        'details' => 'Todo texto publicado aguarda revisão obrigatória da moderação antes de ir ao ar.',
-                    ]
-                );
+        $topicsQuery = Topic::with([
+            'category',
+            'work',
+            'author',
+            'comments' => fn ($q) => $isModerator ? $q->with(['author', 'replies.author']) : $q->where('status', 'APPROVED')->with(['author', 'replies' => fn ($rq) => $rq->where('status', 'APPROVED')->with('author')]),
+        ])->orderByDesc('is_pinned')->latest();
+
+        if (!$isModerator) {
+            if ($currentUser) {
+                $worksQuery->where(function ($q) use ($currentUser) {
+                    $q->where('status', 'APPROVED')
+                      ->orWhere('submitted_by_id', $currentUser->id);
+                });
+                $topicsQuery->where(function ($q) use ($currentUser) {
+                    $q->where('status', 'APPROVED')
+                      ->orWhere('author_id', $currentUser->id);
+                });
+            } else {
+                $worksQuery->where('status', 'APPROVED');
+                $topicsQuery->where('status', 'APPROVED');
             }
         }
 
-        foreach ($topics as $t) {
-            if ($t->status === 'PENDING') {
-                ModerationFlag::firstOrCreate(
-                    [
-                        'target_type' => 'TOPIC',
-                        'target_id' => $t->id,
-                        'status' => 'PENDING',
-                    ],
-                    [
-                        'target_title' => 'Revisão de Novo Ensaio: ' . $t->title,
-                        'target_excerpt' => Str::limit($t->body, 220),
-                        'target_author_id' => $t->author_id,
-                        'target_author_name' => $t->author?->name ?? 'Membro',
-                        'reporter_id' => $t->author_id,
-                        'reporter_name' => 'Fila Obrigatória de Revisão Editorial',
-                        'reason' => 'GUIDELINE_VIOLATION',
-                        'details' => 'Todo ensaio publicado aguarda revisão obrigatória da moderação antes de ir ao ar.',
-                    ]
-                );
+        $works = $worksQuery->get();
+        $topics = $topicsQuery->get();
+
+        if ($isModerator) {
+            // Garante que qualquer Obra ou Ensaio com status PENDING possua item correspondente na fila de moderação
+            foreach ($works as $w) {
+                if ($w->status === 'PENDING') {
+                    ModerationFlag::firstOrCreate(
+                        [
+                            'target_type' => 'WORK',
+                            'target_id' => $w->id,
+                            'status' => 'PENDING',
+                        ],
+                        [
+                            'target_title' => 'Revisão de Nova Obra/Resenha: ' . $w->title,
+                            'target_excerpt' => Str::limit($w->synopsis, 220),
+                            'target_author_id' => $w->submitted_by_id,
+                            'target_author_name' => $w->submittedBy?->name ?? $w->creator ?? 'Membro',
+                            'reporter_id' => $w->submitted_by_id,
+                            'reporter_name' => 'Fila Obrigatória de Revisão Editorial',
+                            'reason' => 'BROKEN_AFFILIATE_LINK',
+                            'details' => 'Todo texto publicado aguarda revisão obrigatória da moderação antes de ir ao ar.',
+                        ]
+                    );
+                }
+            }
+
+            foreach ($topics as $t) {
+                if ($t->status === 'PENDING') {
+                    ModerationFlag::firstOrCreate(
+                        [
+                            'target_type' => 'TOPIC',
+                            'target_id' => $t->id,
+                            'status' => 'PENDING',
+                        ],
+                        [
+                            'target_title' => 'Revisão de Novo Ensaio: ' . $t->title,
+                            'target_excerpt' => Str::limit($t->body, 220),
+                            'target_author_id' => $t->author_id,
+                            'target_author_name' => $t->author?->name ?? 'Membro',
+                            'reporter_id' => $t->author_id,
+                            'reporter_name' => 'Fila Obrigatória de Revisão Editorial',
+                            'reason' => 'GUIDELINE_VIOLATION',
+                            'details' => 'Todo ensaio publicado aguarda revisão obrigatória da moderação antes de ir ao ar.',
+                        ]
+                    );
+                }
             }
         }
 
-        $flags = ModerationFlag::latest()->get();
+        $flags = $isModerator ? ModerationFlag::latest()->get() : collect([]);
 
         $settings = PlatformSetting::first() ?? PlatformSetting::create([
             'amazon_associate_tag' => 'veritaslitterae-20',
@@ -104,7 +136,7 @@ class PlatformController extends Controller
 
         $users = User::orderBy('id')->get();
 
-        $moderationLogs = ModerationLog::latest()->limit(250)->get();
+        $moderationLogs = $isModerator ? ModerationLog::latest()->limit(250)->get() : collect([]);
         $upvotes = Upvote::select(['user_id', 'target_type', 'target_id'])->get();
 
         return response()->json([
@@ -154,7 +186,7 @@ class PlatformController extends Controller
         ]);
 
         $slug = Str::slug($validated['title']) . '-' . random_int(100, 999);
-        $defaultAffiliateUrl = 'https://www.amazon.com.br/s?k=' . urlencode($validated['title']);
+        $canSetAffiliate = $user->hasRole('ADMIN', 'MODERATOR');
 
         $work = Work::create([
             'title' => $validated['title'],
@@ -169,9 +201,9 @@ class PlatformController extends Controller
                 : 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&w=900&q=85',
             'synopsis' => $validated['synopsis'],
             'notable_quotes' => $validated['notable_quotes'] ?? [],
-            'affiliate_url' => !empty($validated['affiliate_url']) ? $validated['affiliate_url'] : $defaultAffiliateUrl,
-            'affiliate_cta_label' => $validated['affiliate_cta_label'] ?? 'Adquirir na Amazon',
-            'affiliate_price_hint' => $validated['affiliate_price_hint'] ?? 'Edição Recomendada',
+            'affiliate_url' => $canSetAffiliate && !empty($validated['affiliate_url']) ? trim($validated['affiliate_url']) : '',
+            'affiliate_cta_label' => $canSetAffiliate && !empty($validated['affiliate_cta_label']) ? $validated['affiliate_cta_label'] : 'Adquirir na Amazon',
+            'affiliate_price_hint' => $canSetAffiliate && !empty($validated['affiliate_price_hint']) ? $validated['affiliate_price_hint'] : 'Edição Recomendada',
             'publisher_or_studio' => $validated['publisher_or_studio'] ?? 'Edição Recomendada',
             'is_featured' => $validated['is_featured'] ?? true,
             'editorial_rating' => 4.9,
@@ -399,6 +431,150 @@ class PlatformController extends Controller
         return response()->json([
             'upvotes_count' => $comment->upvotes_count,
             'already_upvoted' => true,
+        ]);
+    }
+
+    /**
+     * PUT/PATCH /api/works/{id}
+     * Allows the author (or MODERATOR/ADMIN) to edit a work/review and resubmit it for moderation.
+     */
+    public function updateWork(Request $request, int $id): JsonResponse
+    {
+        $user = $this->resolveCurrentUser($request);
+        if (!$user) {
+            return response()->json(['message' => 'Faça login para editar sua publicação.'], 401);
+        }
+
+        $work = Work::findOrFail($id);
+        $isModerator = $user->hasRole('ADMIN', 'MODERATOR');
+        if ($work->submitted_by_id !== $user->id && !$isModerator) {
+            return response()->json(['message' => 'Você não tem permissão para editar esta publicação.'], 403);
+        }
+
+        $validated = $request->validate([
+            'title' => 'required|string|max:255',
+            'subtitle' => 'nullable|string|max:255',
+            'creator' => 'nullable|string|max:255',
+            'media_type' => 'nullable|string|max:32',
+            'release_year' => 'nullable|integer',
+            'category_id' => 'required|exists:categories,id',
+            'cover_url' => 'nullable|string|max:1024',
+            'synopsis' => 'required|string',
+            'notable_quotes' => 'nullable|array',
+            'publisher_or_studio' => 'nullable|string|max:160',
+        ]);
+
+        $newStatus = ($isModerator && $work->status === 'APPROVED') ? 'APPROVED' : 'PENDING';
+
+        $work->update([
+            'title' => $validated['title'],
+            'subtitle' => $validated['subtitle'] ?? null,
+            'creator' => !empty($validated['creator']) ? $validated['creator'] : $work->creator,
+            'media_type' => $validated['media_type'] ?? $work->media_type,
+            'release_year' => $validated['release_year'] ?? $work->release_year,
+            'category_id' => $validated['category_id'],
+            'cover_url' => !empty($validated['cover_url']) ? $validated['cover_url'] : $work->cover_url,
+            'synopsis' => $validated['synopsis'],
+            'notable_quotes' => $validated['notable_quotes'] ?? $work->notable_quotes,
+            'publisher_or_studio' => $validated['publisher_or_studio'] ?? $work->publisher_or_studio,
+            'status' => $newStatus,
+        ]);
+
+        if ($newStatus === 'PENDING') {
+            ModerationFlag::firstOrCreate(
+                [
+                    'target_type' => 'WORK',
+                    'target_id' => $work->id,
+                    'status' => 'PENDING',
+                ],
+                [
+                    'target_title' => 'Reenvio após ajustes: ' . $work->title,
+                    'target_excerpt' => Str::limit($work->synopsis, 220),
+                    'target_author_id' => $work->submitted_by_id,
+                    'target_author_name' => $user->name,
+                    'reporter_id' => $user->id,
+                    'reporter_name' => 'Reenvio do Autor após Feedback',
+                    'reason' => 'GUIDELINE_VIOLATION',
+                    'details' => 'O autor revisou o texto e reenviou para nova análise da moderação.',
+                ]
+            );
+        }
+
+        $work->load(['category', 'submittedBy', 'comments']);
+
+        return response()->json([
+            'work' => $work,
+            'message' => $newStatus === 'PENDING'
+                ? 'Texto atualizado e reenviado para revisão da moderação!'
+                : 'Texto atualizado com sucesso!',
+        ]);
+    }
+
+    /**
+     * PUT/PATCH /api/topics/{id}
+     * Allows the author (or MODERATOR/ADMIN) to edit a topic/essay and resubmit it for moderation.
+     */
+    public function updateTopic(Request $request, int $id): JsonResponse
+    {
+        $user = $this->resolveCurrentUser($request);
+        if (!$user) {
+            return response()->json(['message' => 'Faça login para editar seu ensaio.'], 401);
+        }
+
+        $topic = Topic::findOrFail($id);
+        $isModerator = $user->hasRole('ADMIN', 'MODERATOR');
+        if ($topic->author_id !== $user->id && !$isModerator) {
+            return response()->json(['message' => 'Você não tem permissão para editar este ensaio.'], 403);
+        }
+
+        $validated = $request->validate([
+            'title' => 'required|string|max:255',
+            'excerpt' => 'nullable|string|max:500',
+            'body' => 'required|string',
+            'category_id' => 'required|exists:categories,id',
+            'work_id' => 'nullable|exists:works,id',
+            'tags' => 'nullable|array',
+        ]);
+
+        $newStatus = ($isModerator && $topic->status === 'APPROVED') ? 'APPROVED' : 'PENDING';
+
+        $topic->update([
+            'title' => $validated['title'],
+            'excerpt' => !empty($validated['excerpt']) ? $validated['excerpt'] : Str::limit(strip_tags($validated['body']), 180),
+            'body' => $validated['body'],
+            'category_id' => $validated['category_id'],
+            'work_id' => $validated['work_id'] ?? null,
+            'tags' => $validated['tags'] ?? $topic->tags,
+            'status' => $newStatus,
+        ]);
+
+        if ($newStatus === 'PENDING') {
+            ModerationFlag::firstOrCreate(
+                [
+                    'target_type' => 'TOPIC',
+                    'target_id' => $topic->id,
+                    'status' => 'PENDING',
+                ],
+                [
+                    'target_title' => 'Reenvio após ajustes: ' . $topic->title,
+                    'target_excerpt' => Str::limit($topic->body, 220),
+                    'target_author_id' => $topic->author_id,
+                    'target_author_name' => $user->name,
+                    'reporter_id' => $user->id,
+                    'reporter_name' => 'Reenvio do Autor após Feedback',
+                    'reason' => 'GUIDELINE_VIOLATION',
+                    'details' => 'O autor revisou o ensaio e reenviou para nova análise da moderação.',
+                ]
+            );
+        }
+
+        $topic->load(['category', 'work', 'author', 'comments']);
+
+        return response()->json([
+            'topic' => $topic,
+            'message' => $newStatus === 'PENDING'
+                ? 'Ensaio atualizado e reenviado para revisão da moderação!'
+                : 'Ensaio atualizado com sucesso!',
         ]);
     }
 }
