@@ -65,12 +65,36 @@ class AuthController extends Controller
         $user = User::where('email', $validated['email'])->first();
 
         if (!$user || !Hash::check($validated['password'], $user->password)) {
+            ModerationController::recordAuditLog(
+                null,
+                'AUTH_LOGIN_FAILED',
+                'AUTH',
+                $user?->id,
+                'Tentativa de login com falha (' . $validated['email'] . ')',
+                $user?->name ?? $validated['email'],
+                'Credenciais inválidas informadas na tela de login.',
+                $request,
+                $validated['email'],
+                'VISITOR'
+            );
+
             return response()->json([
                 'message' => 'Credenciais inválidas. Verifique seu e-mail e senha.',
             ], 401);
         }
 
         if ($user->is_banned) {
+            ModerationController::recordAuditLog(
+                $user,
+                'AUTH_LOGIN_BLOCKED',
+                'AUTH',
+                $user->id,
+                'Tentativa de login de conta suspensa: ' . $user->name,
+                $user->name,
+                'Acesso bloqueado pois a conta encontra-se suspensa.',
+                $request
+            );
+
             return response()->json([
                 'message' => 'Esta conta encontra-se suspensa pelo Conselho de Moderação.',
             ], 403);
@@ -79,10 +103,22 @@ class AuthController extends Controller
         $token = Str::random(64);
         $user->update(['api_token' => $token]);
 
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'AUTH_LOGIN',
+            'AUTH',
+            $user->id,
+            'Login realizado: ' . $user->name . ' (' . $user->email . ')',
+            $user->name,
+            'Sessão autenticada com sucesso (papel RBAC: ' . $user->role . ').',
+            $request
+        );
+
         return response()->json([
             'token' => $token,
             'user' => $user,
             'permissions' => $user->permissions(),
+            'log' => $log,
         ]);
     }
 
@@ -116,10 +152,22 @@ class AuthController extends Controller
             'reputation_score' => 50,
         ]);
 
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'USER_REGISTER',
+            'USER',
+            $user->id,
+            'Novo cadastro de membro: ' . $user->name . ' (' . $user->email . ')',
+            $user->name,
+            'Nova conta registrada na plataforma (@' . $user->username . ').',
+            $request
+        );
+
         return response()->json([
             'token' => $token,
             'user' => $user,
             'permissions' => $user->permissions(),
+            'log' => $log,
         ], 201);
     }
 
@@ -157,6 +205,16 @@ class AuthController extends Controller
     {
         $user = self::resolveUserFromRequest($request);
         if ($user) {
+            ModerationController::recordAuditLog(
+                $user,
+                'AUTH_LOGOUT',
+                'AUTH',
+                $user->id,
+                'Logout realizado: ' . $user->name,
+                $user->name,
+                'Sessão encerrada pelo usuário.',
+                $request
+            );
             $user->update(['api_token' => null]);
         }
 
@@ -278,8 +336,20 @@ class AuthController extends Controller
             'bio' => $validated['bio'] ?? $user->bio,
         ]);
 
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'UPDATE_PROFILE',
+            'USER',
+            $user->id,
+            'Perfil atualizado: ' . $user->name,
+            $user->name,
+            'Dados de perfil literário atualizados (' . ($user->title_badge ?: 'Sem título') . ').',
+            $request
+        );
+
         return response()->json([
             'user' => $user,
+            'log' => $log,
             'message' => 'Perfil atualizado com sucesso.',
         ]);
     }

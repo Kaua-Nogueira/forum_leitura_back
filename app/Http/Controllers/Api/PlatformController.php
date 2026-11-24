@@ -138,7 +138,9 @@ class PlatformController extends Controller
 
         $users = User::orderBy('id')->get();
 
-        $moderationLogs = $isModerator ? ModerationLog::latest()->limit(250)->get() : collect([]);
+        $moderationLogs = $isModerator
+            ? ModerationLog::orderByDesc('created_at')->orderByDesc('id')->limit(750)->get()
+            : collect([]);
         $upvotes = Upvote::select(['user_id', 'target_type', 'target_id'])->get();
 
         $series = ReadingSeries::with([
@@ -239,22 +241,49 @@ class PlatformController extends Controller
 
         $work->load(['category', 'submittedBy', 'comments.author', 'comments.replies.author']);
 
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'CREATE_WORK',
+            'WORK',
+            $work->id,
+            $work->title . ' (' . $work->creator . ')',
+            $user->name,
+            'Nova obra/resenha submetida para revisão editorial.',
+            $request
+        );
+
         return response()->json([
             'work' => $work,
             'flag' => $flag,
+            'log' => $log,
         ], 201);
     }
 
     /**
      * POST /api/works/{id}/affiliate-click
      */
-    public function trackAffiliateClick(int $id): JsonResponse
+    public function trackAffiliateClick(Request $request, int $id): JsonResponse
     {
+        $user = $this->resolveCurrentUser($request);
         $work = Work::findOrFail($id);
         $work->increment('affiliate_clicks_count');
 
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'CLICK_AFFILIATE',
+            'WORK',
+            $work->id,
+            $work->title . ' (' . $work->creator . ')',
+            $work->creator,
+            'Clique no botão de afiliado Amazon (total acumulado: ' . $work->affiliate_clicks_count . ').',
+            $request,
+            'Leitor / Visitante',
+            'VISITOR'
+        );
+
         return response()->json([
             'clicks_count' => $work->affiliate_clicks_count,
+            'log' => $log,
         ]);
     }
 
@@ -309,9 +338,21 @@ class PlatformController extends Controller
 
         $topic->load(['category', 'work', 'author', 'comments.author', 'comments.replies.author']);
 
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'CREATE_TOPIC',
+            'TOPIC',
+            $topic->id,
+            $topic->title,
+            $user->name,
+            'Novo ensaio submetido para revisão editorial.',
+            $request
+        );
+
         return response()->json([
             'topic' => $topic,
             'flag' => $flag,
+            'log' => $log,
         ], 201);
     }
 
@@ -348,21 +389,48 @@ class PlatformController extends Controller
             'status' => 'APPROVED',
         ]);
 
+        $contextLabel = 'Discussão Geral';
         if (!empty($validated['work_id'])) {
-            Work::where('id', $validated['work_id'])->increment('reviews_count');
+            $w = Work::find($validated['work_id']);
+            if ($w) {
+                $w->increment('reviews_count');
+                $contextLabel = 'Obra: ' . $w->title;
+            }
         }
 
         if (!empty($validated['topic_id'])) {
-            Topic::where('id', $validated['topic_id'])->increment('comments_count');
+            $t = Topic::find($validated['topic_id']);
+            if ($t) {
+                $t->increment('comments_count');
+                $contextLabel = 'Ensaio: ' . $t->title;
+            }
         }
 
         if (!empty($validated['series_entry_id'])) {
-            SeriesEntry::where('id', $validated['series_entry_id'])->increment('comments_count');
+            $se = SeriesEntry::find($validated['series_entry_id']);
+            if ($se) {
+                $se->increment('comments_count');
+                $contextLabel = 'Nota de Série #' . $se->entry_number . ': ' . $se->title;
+            }
         }
 
         $comment->load(['author', 'replies.author']);
 
-        return response()->json(['comment' => $comment], 201);
+        $log = ModerationController::recordAuditLog(
+            $user,
+            !empty($validated['parent_id']) ? 'REPLY_COMMENT' : 'CREATE_COMMENT',
+            'COMMENT',
+            $comment->id,
+            'Comentário #' . $comment->id . ' em ' . $contextLabel,
+            $user->name,
+            '“' . Str::limit($comment->body, 200) . '”',
+            $request
+        );
+
+        return response()->json([
+            'comment' => $comment,
+            'log' => $log,
+        ], 201);
     }
 
     /**
@@ -389,47 +457,59 @@ class PlatformController extends Controller
 
         if ($alreadyLiked) {
             $alreadyLiked->delete();
+            $upvotesCount = 0;
+            $targetTitle = $validated['target_type'] . ' #' . $validated['target_id'];
 
             if ($validated['target_type'] === 'TOPIC') {
                 $topic = Topic::find($validated['target_id']);
-                if ($topic && $topic->upvotes_count > 0) {
-                    $topic->decrement('upvotes_count');
+                if ($topic) {
+                    if ($topic->upvotes_count > 0) {
+                        $topic->decrement('upvotes_count');
+                    }
+                    $upvotesCount = $topic->upvotes_count;
+                    $targetTitle = 'Ensaio: ' . $topic->title;
                 }
-                return response()->json([
-                    'upvotes_count' => $topic ? $topic->upvotes_count : 0,
-                    'already_upvoted' => false,
-                    'unliked' => true,
-                ]);
-            }
-
-            if ($validated['target_type'] === 'SERIES_ENTRY') {
+            } elseif ($validated['target_type'] === 'SERIES_ENTRY') {
                 $entry = SeriesEntry::find($validated['target_id']);
-                if ($entry && $entry->upvotes_count > 0) {
-                    $entry->decrement('upvotes_count');
+                if ($entry) {
+                    if ($entry->upvotes_count > 0) {
+                        $entry->decrement('upvotes_count');
+                    }
+                    $upvotesCount = $entry->upvotes_count;
+                    $targetTitle = 'Nota #' . $entry->entry_number . ': ' . $entry->title;
                 }
-                return response()->json([
-                    'upvotes_count' => $entry ? $entry->upvotes_count : 0,
-                    'already_upvoted' => false,
-                    'unliked' => true,
-                ]);
+            } elseif ($validated['target_type'] === 'COMMENT') {
+                $comment = Comment::find($validated['target_id']);
+                if ($comment) {
+                    if ($comment->upvotes_count > 0) {
+                        $comment->decrement('upvotes_count');
+                    }
+                    $upvotesCount = $comment->upvotes_count;
+                    $targetTitle = 'Comentário #' . $comment->id . ': ' . Str::limit($comment->body, 80);
+                }
+            } elseif ($validated['target_type'] === 'WORK') {
+                $work = Work::find($validated['target_id']);
+                if ($work) {
+                    $targetTitle = 'Obra: ' . $work->title;
+                }
             }
 
-            if ($validated['target_type'] === 'COMMENT') {
-                $comment = Comment::find($validated['target_id']);
-                if ($comment && $comment->upvotes_count > 0) {
-                    $comment->decrement('upvotes_count');
-                }
-                return response()->json([
-                    'upvotes_count' => $comment ? $comment->upvotes_count : 0,
-                    'already_upvoted' => false,
-                    'unliked' => true,
-                ]);
-            }
+            $log = ModerationController::recordAuditLog(
+                $user,
+                'UPVOTE_REMOVE',
+                $validated['target_type'],
+                (int) $validated['target_id'],
+                $targetTitle,
+                null,
+                'Curtida removida por ' . $user->name . '.',
+                $request
+            );
 
             return response()->json([
-                'upvotes_count' => 0,
+                'upvotes_count' => $upvotesCount,
                 'already_upvoted' => false,
                 'unliked' => true,
+                'log' => $log,
             ]);
         }
 
@@ -439,37 +519,44 @@ class PlatformController extends Controller
             'target_id' => $validated['target_id'],
         ]);
 
+        $upvotesCount = 1;
+        $targetTitle = $validated['target_type'] . ' #' . $validated['target_id'];
+
         if ($validated['target_type'] === 'TOPIC') {
             $topic = Topic::findOrFail($validated['target_id']);
             $topic->increment('upvotes_count');
-            return response()->json([
-                'upvotes_count' => $topic->upvotes_count,
-                'already_upvoted' => true,
-            ]);
-        }
-
-        if ($validated['target_type'] === 'SERIES_ENTRY') {
+            $upvotesCount = $topic->upvotes_count;
+            $targetTitle = 'Ensaio: ' . $topic->title;
+        } elseif ($validated['target_type'] === 'SERIES_ENTRY') {
             $entry = SeriesEntry::findOrFail($validated['target_id']);
             $entry->increment('upvotes_count');
-            return response()->json([
-                'upvotes_count' => $entry->upvotes_count,
-                'already_upvoted' => true,
-            ]);
-        }
-
-        if ($validated['target_type'] === 'WORK') {
+            $upvotesCount = $entry->upvotes_count;
+            $targetTitle = 'Nota #' . $entry->entry_number . ': ' . $entry->title;
+        } elseif ($validated['target_type'] === 'WORK') {
             $work = Work::findOrFail($validated['target_id']);
-            return response()->json([
-                'upvotes_count' => 1,
-                'already_upvoted' => true,
-            ]);
+            $targetTitle = 'Obra: ' . $work->title;
+        } else {
+            $comment = Comment::findOrFail($validated['target_id']);
+            $comment->increment('upvotes_count');
+            $upvotesCount = $comment->upvotes_count;
+            $targetTitle = 'Comentário #' . $comment->id . ': ' . Str::limit($comment->body, 80);
         }
 
-        $comment = Comment::findOrFail($validated['target_id']);
-        $comment->increment('upvotes_count');
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'UPVOTE_ADD',
+            $validated['target_type'],
+            (int) $validated['target_id'],
+            $targetTitle,
+            null,
+            'Curtida registrada por ' . $user->name . '.',
+            $request
+        );
+
         return response()->json([
-            'upvotes_count' => $comment->upvotes_count,
+            'upvotes_count' => $upvotesCount,
             'already_upvoted' => true,
+            'log' => $log,
         ]);
     }
 
@@ -541,8 +628,22 @@ class PlatformController extends Controller
 
         $work->load(['category', 'submittedBy', 'comments']);
 
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'UPDATE_WORK',
+            'WORK',
+            $work->id,
+            $work->title,
+            $work->submittedBy?->name ?? $user->name,
+            $newStatus === 'PENDING'
+                ? 'Obra/resenha editada pelo autor e reenviada para revisão da moderação.'
+                : 'Obra/resenha editada e atualizada.',
+            $request
+        );
+
         return response()->json([
             'work' => $work,
+            'log' => $log,
             'message' => $newStatus === 'PENDING'
                 ? 'Texto atualizado e reenviado para revisão da moderação!'
                 : 'Texto atualizado com sucesso!',
@@ -609,8 +710,22 @@ class PlatformController extends Controller
 
         $topic->load(['category', 'work', 'author', 'comments']);
 
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'UPDATE_TOPIC',
+            'TOPIC',
+            $topic->id,
+            $topic->title,
+            $topic->author?->name ?? $user->name,
+            $newStatus === 'PENDING'
+                ? 'Ensaio editado pelo autor e reenviado para revisão da moderação.'
+                : 'Ensaio editado e atualizado.',
+            $request
+        );
+
         return response()->json([
             'topic' => $topic,
+            'log' => $log,
             'message' => $newStatus === 'PENDING'
                 ? 'Ensaio atualizado e reenviado para revisão da moderação!'
                 : 'Ensaio atualizado com sucesso!',

@@ -46,7 +46,8 @@ Route::post('/series/{id}/entries', [SeriesController::class, 'storeEntry']);
 Route::match(['PUT', 'PATCH'], '/series/{seriesId}/entries/{entryId}', [SeriesController::class, 'updateEntry']);
 Route::delete('/series/{seriesId}/entries/{entryId}', [SeriesController::class, 'destroyEntry']);
 
-// Governança, Fila de Moderação, Exclusão Auditada & Tag Global de Afiliado Amazon
+// Governança, Fila de Moderação, Logs do Sistema, Exclusão Auditada & Tag Global de Afiliado Amazon
+Route::get('/moderation/logs', [ModerationController::class, 'listLogs']);
 Route::post('/flags', [ModerationController::class, 'createFlag']);
 Route::post('/moderation/flags/{id}/resolve', [ModerationController::class, 'resolveFlag']);
 Route::post('/moderation/works/{id}/status', [ModerationController::class, 'moderateWork']);

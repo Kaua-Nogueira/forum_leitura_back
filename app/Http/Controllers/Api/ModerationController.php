@@ -27,26 +27,52 @@ class ModerationController extends Controller
     }
 
     public static function recordAuditLog(
-        User $actor,
+        ?User $actor,
         string $actionType,
         string $targetType,
         ?int $targetId,
         string $targetTitle,
         ?string $targetAuthorName,
         ?string $reason,
-        Request $request
+        Request $request,
+        string $fallbackActorName = 'Visitante Anônimo',
+        string $fallbackActorRole = 'VISITOR'
     ): ModerationLog {
         return ModerationLog::create([
-            'actor_id' => $actor->id,
-            'actor_name' => $actor->name,
-            'actor_role' => $actor->role,
-            'action_type' => $actionType,
-            'target_type' => $targetType,
+            'actor_id' => $actor?->id,
+            'actor_name' => $actor?->name ?? $fallbackActorName,
+            'actor_role' => $actor?->role ?? $fallbackActorRole,
+            'action_type' => Str::limit($actionType, 48, ''),
+            'target_type' => Str::limit($targetType, 24, ''),
             'target_id' => $targetId,
             'target_title' => Str::limit($targetTitle, 240),
-            'target_author_name' => $targetAuthorName,
-            'reason' => $reason ?: 'Ação de moderação registrada no livro de auditoria.',
+            'target_author_name' => $targetAuthorName ? Str::limit($targetAuthorName, 240) : null,
+            'reason' => $reason ?: 'Ação registrada no livro de logs do sistema.',
             'ip_address' => $request->ip() ?? '127.0.0.1',
+        ]);
+    }
+
+    /**
+     * GET /api/moderation/logs (RBAC: MODERATOR or ADMIN)
+     * Retorna o histórico completo de logs de atividades e moderação do sistema.
+     */
+    public function listLogs(Request $request): JsonResponse
+    {
+        $user = $this->resolveCurrentUser($request);
+        if (!$user || !$user->hasRole('ADMIN', 'MODERATOR')) {
+            return response()->json([
+                'message' => 'Acesso negado (RBAC): apenas Moderadores e Administradores podem visualizar os logs do sistema.',
+            ], 403);
+        }
+
+        $limit = min(max((int) $request->query('limit', 1000), 50), 2500);
+        $logs = ModerationLog::orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->get();
+
+        return response()->json([
+            'logs' => $logs,
         ]);
     }
 
@@ -119,7 +145,23 @@ class ModerationController extends Controller
             'status' => 'PENDING',
         ]);
 
-        return response()->json(['flag' => $flag], 201);
+        $log = self::recordAuditLog(
+            $user,
+            'CREATE_FLAG',
+            $validated['target_type'],
+            (int) $validated['target_id'],
+            $validated['target_title'],
+            $targetAuthorName,
+            'Sinalização enviada (' . $validated['reason'] . '): ' . $details,
+            $request,
+            $reporterName,
+            'VISITOR'
+        );
+
+        return response()->json([
+            'flag' => $flag,
+            'log' => $log,
+        ], 201);
     }
 
     /**

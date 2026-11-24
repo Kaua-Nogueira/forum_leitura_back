@@ -86,8 +86,20 @@ class SeriesController extends Controller
 
         $series->load(['category', 'work', 'author', 'entries']);
 
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'CREATE_SERIES',
+            'SERIES',
+            $series->id,
+            $series->title,
+            $user->name,
+            'Nova série/caderno criada (' . ($series->book_title ?: 'Publicação recorrente') . ').',
+            $request
+        );
+
         return response()->json([
             'series' => $series,
+            'log' => $log,
             'message' => 'Série / Caderno criado com sucesso!',
         ], 201);
     }
@@ -118,14 +130,26 @@ class SeriesController extends Controller
             'cadence_label' => 'nullable|string|max:80',
             'category_id' => 'sometimes|required|exists:categories,id',
             'work_id' => 'nullable|exists:works,id',
-            'status' => 'nullable|in:ACTIVE,COMPLETED,ARCHIVED',
+            'status' => 'nullable|in:ACTIVE,COMPLETED,ARCHIVED,ONGOING,PAUSED',
         ]);
 
         $series->update($validated);
         $series->load(['category', 'work', 'author', 'entries.author', 'entries.comments.author', 'entries.comments.replies.author']);
 
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'UPDATE_SERIES',
+            'SERIES',
+            $series->id,
+            $series->title,
+            $series->author?->name ?? $user->name,
+            'Dados da série atualizados por ' . $user->name . '.',
+            $request
+        );
+
         return response()->json([
             'series' => $series,
+            'log' => $log,
             'message' => 'Série atualizada com sucesso!',
         ]);
     }
@@ -140,16 +164,30 @@ class SeriesController extends Controller
             return response()->json(['message' => 'Faça login para excluir a série.'], 401);
         }
 
-        $series = ReadingSeries::findOrFail($id);
+        $series = ReadingSeries::with('author')->findOrFail($id);
         if ($series->author_id !== $user->id && !$user->hasRole('MODERATOR', 'ADMIN')) {
             return response()->json(['message' => 'Você não tem permissão para excluir esta série.'], 403);
         }
 
+        $seriesTitle = $series->title;
+        $seriesAuthorName = $series->author?->name ?? $user->name;
         $series->delete();
+
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'DELETE_SERIES',
+            'SERIES',
+            $id,
+            $seriesTitle,
+            $seriesAuthorName,
+            'Série/caderno excluído por ' . $user->name . '.',
+            $request
+        );
 
         return response()->json([
             'deleted' => true,
             'series_id' => $id,
+            'log' => $log,
             'message' => 'Série excluída com sucesso.',
         ]);
     }
@@ -203,9 +241,21 @@ class SeriesController extends Controller
 
         $entry->load(['author', 'comments']);
 
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'CREATE_SERIES_ENTRY',
+            'SERIES_ENTRY',
+            $entry->id,
+            $series->title . ' — #' . $entry->entry_number . ' ' . $entry->title,
+            $user->name,
+            'Nova nota (#' . $entry->entry_number . ' • ' . $entry->reference_label . ') publicada na série.',
+            $request
+        );
+
         return response()->json([
             'entry' => $entry,
             'series_id' => $series->id,
+            'log' => $log,
             'message' => 'Nova nota publicada na série!',
         ], 201);
     }
@@ -235,8 +285,20 @@ class SeriesController extends Controller
         $entry->update($validated);
         $entry->load(['author', 'comments.author', 'comments.replies.author']);
 
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'UPDATE_SERIES_ENTRY',
+            'SERIES_ENTRY',
+            $entry->id,
+            'Nota #' . $entry->entry_number . ' — ' . $entry->title,
+            $entry->author?->name ?? $user->name,
+            'Nota da série editada por ' . $user->name . '.',
+            $request
+        );
+
         return response()->json([
             'entry' => $entry,
+            'log' => $log,
             'message' => 'Nota atualizada com sucesso!',
         ]);
     }
@@ -251,10 +313,13 @@ class SeriesController extends Controller
             return response()->json(['message' => 'Faça login para excluir a nota.'], 401);
         }
 
-        $entry = SeriesEntry::where('series_id', $seriesId)->findOrFail($entryId);
+        $entry = SeriesEntry::with('author')->where('series_id', $seriesId)->findOrFail($entryId);
         if ($entry->author_id !== $user->id && !$user->hasRole('MODERATOR', 'ADMIN')) {
             return response()->json(['message' => 'Você não tem permissão para excluir esta nota.'], 403);
         }
+
+        $entryTitle = 'Nota #' . $entry->entry_number . ' — ' . $entry->title;
+        $entryAuthorName = $entry->author?->name ?? $user->name;
 
         $series = ReadingSeries::find($seriesId);
         $entry->delete();
@@ -262,10 +327,22 @@ class SeriesController extends Controller
             $series->decrement('entries_count');
         }
 
+        $log = ModerationController::recordAuditLog(
+            $user,
+            'DELETE_SERIES_ENTRY',
+            'SERIES_ENTRY',
+            $entryId,
+            $entryTitle,
+            $entryAuthorName,
+            'Nota excluída da série por ' . $user->name . '.',
+            $request
+        );
+
         return response()->json([
             'deleted' => true,
             'series_id' => $seriesId,
             'entry_id' => $entryId,
+            'log' => $log,
             'message' => 'Nota excluída com sucesso.',
         ]);
     }
