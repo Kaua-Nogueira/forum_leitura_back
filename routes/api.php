@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ModerationController;
 use App\Http\Controllers\Api\PlatformController;
 use App\Http\Controllers\Api\SeriesController;
+use App\Http\Controllers\Api\SocialChatController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -45,6 +46,13 @@ Route::delete('/series/{id}', [SeriesController::class, 'destroy']);
 Route::post('/series/{id}/entries', [SeriesController::class, 'storeEntry']);
 Route::match(['PUT', 'PATCH'], '/series/{seriesId}/entries/{entryId}', [SeriesController::class, 'updateEntry']);
 Route::delete('/series/{seriesId}/entries/{entryId}', [SeriesController::class, 'destroyEntry']);
+
+// Rede Social (Seguir Pessoas) & Chat Privado (Mensagens Diretas)
+Route::get('/social/overview', [SocialChatController::class, 'overview']);
+Route::post('/social/follow/{targetUserId}', [SocialChatController::class, 'toggleFollow']);
+Route::post('/chat/messages', [SocialChatController::class, 'sendMessage']);
+Route::post('/chat/messages/{partnerId}/read', [SocialChatController::class, 'markConversationRead']);
+Route::delete('/chat/messages/{messageId}', [SocialChatController::class, 'deleteMessage']);
 
 // Governança, Fila de Moderação, Logs do Sistema, Exclusão Auditada & Tag Global de Afiliado Amazon
 Route::get('/moderation/logs', [ModerationController::class, 'listLogs']);

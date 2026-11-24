@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Category;
 use App\Models\Comment;
+use App\Models\DirectMessage;
 use App\Models\ModerationFlag;
 use App\Models\ModerationLog;
 use App\Models\PlatformSetting;
@@ -13,9 +14,11 @@ use App\Models\SeriesEntry;
 use App\Models\Topic;
 use App\Models\Upvote;
 use App\Models\User;
+use App\Models\UserFollow;
 use App\Models\Work;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class PlatformController extends Controller
@@ -152,6 +155,22 @@ class PlatformController extends Controller
             'entries.comments.replies.author',
         ])->latest()->get();
 
+        $userFollows = Schema::hasTable('user_follows')
+            ? UserFollow::select(['follower_id', 'following_id', 'created_at'])->get()
+            : collect([]);
+
+        $directMessages = ($currentUser && Schema::hasTable('direct_messages'))
+            ? DirectMessage::with(['sender', 'recipient'])
+                ->where(function ($q) use ($currentUser) {
+                    $q->where('sender_id', $currentUser->id)
+                      ->orWhere('recipient_id', $currentUser->id);
+                })
+                ->orderBy('created_at')
+                ->orderBy('id')
+                ->limit(1500)
+                ->get()
+            : collect([]);
+
         return response()->json([
             'categories' => $categories,
             'works' => $works,
@@ -162,6 +181,8 @@ class PlatformController extends Controller
             'upvotes' => $upvotes,
             'settings' => $settings,
             'users' => $users,
+            'user_follows' => $userFollows,
+            'direct_messages' => $directMessages,
         ]);
     }
 
