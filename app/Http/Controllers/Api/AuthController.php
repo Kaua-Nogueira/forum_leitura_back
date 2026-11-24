@@ -328,13 +328,24 @@ class AuthController extends Controller
             'name' => 'required|string|max:120',
             'title_badge' => 'nullable|string|max:120',
             'bio' => 'nullable|string|max:600',
+            'avatar_url' => 'nullable|string',
+            'cover_url' => 'nullable|string',
         ]);
 
-        $user->update([
+        $updateData = [
             'name' => $validated['name'],
             'title_badge' => $validated['title_badge'] ?? $user->title_badge,
             'bio' => $validated['bio'] ?? $user->bio,
-        ]);
+        ];
+
+        if (array_key_exists('avatar_url', $validated)) {
+            $updateData['avatar_url'] = $validated['avatar_url'] ?: null;
+        }
+        if (array_key_exists('cover_url', $validated)) {
+            $updateData['cover_url'] = $validated['cover_url'] ?: null;
+        }
+
+        $user->update($updateData);
 
         $log = ModerationController::recordAuditLog(
             $user,

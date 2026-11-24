@@ -20,6 +20,7 @@ class User extends Authenticatable
         'title_badge',
         'bio',
         'avatar_url',
+        'cover_url',
         'is_banned',
         'reputation_score',
     ];
