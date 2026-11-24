@@ -7,6 +7,7 @@ use App\Models\ReadingSeries;
 use App\Models\SeriesEntry;
 use App\Models\User;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 
 class CfwSeriesSeeder extends Seeder
@@ -20,23 +21,39 @@ class CfwSeriesSeeder extends Seeder
             $category = Category::create([
                 'name' => 'Letras & Teologia',
                 'slug' => 'letras-teologia',
+                'latin_motto' => 'Fides quaerens intellectum',
                 'description' => 'Estudos literários, filosofia clássica e teologia.',
-                'accent_color' => '#7C2D12',
+                'accent_color' => 'burgundy',
+                'icon_name' => 'BookOpen',
             ]);
         }
 
-        $author = User::where('email', 'kauanog9@gmail.com')->first()
-            ?? User::where('role', 'ADMIN')->first()
-            ?? User::first();
+        $author = User::where('email', 'kauanog9@gmail.com')
+            ->orWhere('username', 'kaua.nogueira')
+            ->orWhere('name', 'Kauã Nogueira')
+            ->orWhere('name', 'Kaua Nogueira')
+            ->first();
 
         if (! $author) {
-            $this->command?->error('Nenhum usuário encontrado no banco para atribuir a série.');
-            return;
-        }
-
-        if ($author->role === 'MEMBER') {
-            $author->role = 'COLUMNIST';
-            $author->save();
+            $author = User::create([
+                'name' => 'Kauã Nogueira',
+                'username' => 'kaua.nogueira',
+                'email' => 'kauanog9@gmail.com',
+                'password' => Hash::make('password'),
+                'role' => 'ADMIN',
+                'title_badge' => 'Admin Mor & Autor • Estudos Reformados',
+                'bio' => 'Autor dos Comentários à Confissão de Fé de Westminster (CFW) e Administrador Geral.',
+                'is_banned' => false,
+                'reputation_score' => 2000,
+            ]);
+        } else {
+            $author->update([
+                'name' => 'Kauã Nogueira',
+                'role' => 'ADMIN',
+                'title_badge' => 'Admin Mor & Autor • Estudos Reformados',
+                'is_banned' => false,
+                'reputation_score' => max((int) $author->reputation_score, 2000),
+            ]);
         }
 
         $series = ReadingSeries::updateOrCreate(

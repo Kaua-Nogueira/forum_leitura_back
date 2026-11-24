@@ -155,5 +155,7 @@ class DatabaseSeeder extends Seeder
                 'status' => 'PENDING',
             ]);
         }
+
+        $this->call(CfwSeriesSeeder::class);
     }
 }
