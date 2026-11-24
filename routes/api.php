@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ModerationController;
 use App\Http\Controllers\Api\PlatformController;
+use App\Http\Controllers\Api\SeriesController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -35,6 +36,15 @@ Route::post('/topics', [PlatformController::class, 'createTopic']);
 Route::match(['PUT', 'PATCH'], '/topics/{id}', [PlatformController::class, 'updateTopic']);
 Route::post('/comments', [PlatformController::class, 'createComment']);
 Route::post('/upvotes', [PlatformController::class, 'toggleUpvote']);
+
+// Séries & Cadernos (Publicações Recorrentes — RBAC: COLUMNIST, MODERATOR, ADMIN)
+Route::get('/series', [SeriesController::class, 'index']);
+Route::post('/series', [SeriesController::class, 'store']);
+Route::match(['PUT', 'PATCH'], '/series/{id}', [SeriesController::class, 'update']);
+Route::delete('/series/{id}', [SeriesController::class, 'destroy']);
+Route::post('/series/{id}/entries', [SeriesController::class, 'storeEntry']);
+Route::match(['PUT', 'PATCH'], '/series/{seriesId}/entries/{entryId}', [SeriesController::class, 'updateEntry']);
+Route::delete('/series/{seriesId}/entries/{entryId}', [SeriesController::class, 'destroyEntry']);
 
 // Governança, Fila de Moderação, Exclusão Auditada & Tag Global de Afiliado Amazon
 Route::post('/flags', [ModerationController::class, 'createFlag']);

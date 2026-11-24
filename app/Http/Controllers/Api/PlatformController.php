@@ -8,6 +8,8 @@ use App\Models\Comment;
 use App\Models\ModerationFlag;
 use App\Models\ModerationLog;
 use App\Models\PlatformSetting;
+use App\Models\ReadingSeries;
+use App\Models\SeriesEntry;
 use App\Models\Topic;
 use App\Models\Upvote;
 use App\Models\User;
@@ -139,10 +141,20 @@ class PlatformController extends Controller
         $moderationLogs = $isModerator ? ModerationLog::latest()->limit(250)->get() : collect([]);
         $upvotes = Upvote::select(['user_id', 'target_type', 'target_id'])->get();
 
+        $series = ReadingSeries::with([
+            'category',
+            'work',
+            'author',
+            'entries.author',
+            'entries.comments.author',
+            'entries.comments.replies.author',
+        ])->latest()->get();
+
         return response()->json([
             'categories' => $categories,
             'works' => $works,
             'topics' => $topics,
+            'series' => $series,
             'moderation_flags' => $flags,
             'moderation_logs' => $moderationLogs,
             'upvotes' => $upvotes,
@@ -158,7 +170,7 @@ class PlatformController extends Controller
     public function createWork(Request $request): JsonResponse
     {
         $user = $this->resolveCurrentUser($request);
-        if (!$user || !$user->hasRole('MEMBER', 'MODERATOR', 'ADMIN')) {
+        if (!$user || !$user->hasRole('MEMBER', 'COLUMNIST', 'MODERATOR', 'ADMIN')) {
             return response()->json([
                 'message' => 'Autenticação necessária: faça login como Membro, Moderador ou Admin para publicar obras.',
             ], 401);
@@ -252,7 +264,7 @@ class PlatformController extends Controller
     public function createTopic(Request $request): JsonResponse
     {
         $user = $this->resolveCurrentUser($request);
-        if (!$user || !$user->hasRole('MEMBER', 'MODERATOR', 'ADMIN')) {
+        if (!$user || !$user->hasRole('MEMBER', 'COLUMNIST', 'MODERATOR', 'ADMIN')) {
             return response()->json([
                 'message' => 'Autenticação necessária: faça login para publicar um ensaio.',
             ], 401);
@@ -309,7 +321,7 @@ class PlatformController extends Controller
     public function createComment(Request $request): JsonResponse
     {
         $user = $this->resolveCurrentUser($request);
-        if (!$user || !$user->hasRole('MEMBER', 'MODERATOR', 'ADMIN')) {
+        if (!$user || !$user->hasRole('MEMBER', 'COLUMNIST', 'MODERATOR', 'ADMIN')) {
             return response()->json([
                 'message' => 'Faça login na sua conta para publicar comentários.',
             ], 401);
@@ -320,6 +332,7 @@ class PlatformController extends Controller
             'rating' => 'nullable|integer|min:1|max:5',
             'work_id' => 'nullable|exists:works,id',
             'topic_id' => 'nullable|exists:topics,id',
+            'series_entry_id' => 'nullable|exists:series_entries,id',
             'parent_id' => 'nullable|exists:comments,id',
         ]);
 
@@ -328,6 +341,7 @@ class PlatformController extends Controller
             'rating' => $validated['rating'] ?? null,
             'work_id' => $validated['work_id'] ?? null,
             'topic_id' => $validated['topic_id'] ?? null,
+            'series_entry_id' => $validated['series_entry_id'] ?? null,
             'parent_id' => $validated['parent_id'] ?? null,
             'author_id' => $user->id,
             'upvotes_count' => 1,
@@ -342,25 +356,29 @@ class PlatformController extends Controller
             Topic::where('id', $validated['topic_id'])->increment('comments_count');
         }
 
+        if (!empty($validated['series_entry_id'])) {
+            SeriesEntry::where('id', $validated['series_entry_id'])->increment('comments_count');
+        }
+
         $comment->load(['author', 'replies.author']);
 
         return response()->json(['comment' => $comment], 201);
     }
 
     /**
-     * POST /api/upvotes (RBAC: MEMBER, MODERATOR, ADMIN — 1 upvote per user per item)
+     * POST /api/upvotes (RBAC: MEMBER, COLUMNIST, MODERATOR, ADMIN — 1 upvote per user per item)
      */
     public function toggleUpvote(Request $request): JsonResponse
     {
         $user = $this->resolveCurrentUser($request);
-        if (!$user || !$user->hasRole('MEMBER', 'MODERATOR', 'ADMIN')) {
+        if (!$user || !$user->hasRole('MEMBER', 'COLUMNIST', 'MODERATOR', 'ADMIN')) {
             return response()->json([
                 'message' => 'Para curtir e comentar é necessário ter uma conta e estar logado.',
             ], 401);
         }
 
         $validated = $request->validate([
-            'target_type' => 'required|in:WORK,TOPIC,COMMENT',
+            'target_type' => 'required|in:WORK,TOPIC,COMMENT,SERIES_ENTRY',
             'target_id' => 'required|integer',
         ]);
 
@@ -379,6 +397,18 @@ class PlatformController extends Controller
                 }
                 return response()->json([
                     'upvotes_count' => $topic ? $topic->upvotes_count : 0,
+                    'already_upvoted' => false,
+                    'unliked' => true,
+                ]);
+            }
+
+            if ($validated['target_type'] === 'SERIES_ENTRY') {
+                $entry = SeriesEntry::find($validated['target_id']);
+                if ($entry && $entry->upvotes_count > 0) {
+                    $entry->decrement('upvotes_count');
+                }
+                return response()->json([
+                    'upvotes_count' => $entry ? $entry->upvotes_count : 0,
                     'already_upvoted' => false,
                     'unliked' => true,
                 ]);
@@ -414,6 +444,15 @@ class PlatformController extends Controller
             $topic->increment('upvotes_count');
             return response()->json([
                 'upvotes_count' => $topic->upvotes_count,
+                'already_upvoted' => true,
+            ]);
+        }
+
+        if ($validated['target_type'] === 'SERIES_ENTRY') {
+            $entry = SeriesEntry::findOrFail($validated['target_id']);
+            $entry->increment('upvotes_count');
+            return response()->json([
+                'upvotes_count' => $entry->upvotes_count,
                 'already_upvoted' => true,
             ]);
         }

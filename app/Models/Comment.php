@@ -15,6 +15,7 @@ class Comment extends Model
         'rating',
         'work_id',
         'topic_id',
+        'series_entry_id',
         'parent_id',
         'author_id',
         'upvotes_count',

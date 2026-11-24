@@ -56,9 +56,10 @@ class User extends Authenticatable
         $role = strtoupper($this->role);
 
         return [
-            'can_create_work' => in_array($role, ['MEMBER', 'MODERATOR', 'ADMIN'], true) && !$this->is_banned,
-            'can_create_topic' => in_array($role, ['MEMBER', 'MODERATOR', 'ADMIN'], true) && !$this->is_banned,
-            'can_comment' => in_array($role, ['MEMBER', 'MODERATOR', 'ADMIN'], true) && !$this->is_banned,
+            'can_create_work' => in_array($role, ['MEMBER', 'COLUMNIST', 'MODERATOR', 'ADMIN'], true) && !$this->is_banned,
+            'can_create_topic' => in_array($role, ['MEMBER', 'COLUMNIST', 'MODERATOR', 'ADMIN'], true) && !$this->is_banned,
+            'can_comment' => in_array($role, ['MEMBER', 'COLUMNIST', 'MODERATOR', 'ADMIN'], true) && !$this->is_banned,
+            'can_manage_series' => in_array($role, ['COLUMNIST', 'MODERATOR', 'ADMIN'], true) && !$this->is_banned,
             'can_publish_directly' => in_array($role, ['MODERATOR', 'ADMIN'], true) && !$this->is_banned,
             'can_moderate_queue' => in_array($role, ['MODERATOR', 'ADMIN'], true) && !$this->is_banned,
             'can_ban_users' => $role === 'ADMIN' && !$this->is_banned,

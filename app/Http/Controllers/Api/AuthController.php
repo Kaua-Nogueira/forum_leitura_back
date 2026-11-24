@@ -199,7 +199,7 @@ class AuthController extends Controller
         }
 
         $validated = $request->validate([
-            'role' => 'nullable|in:MEMBER,MODERATOR,ADMIN',
+            'role' => 'nullable|in:MEMBER,COLUMNIST,MODERATOR,ADMIN',
             'is_banned' => 'nullable|boolean',
             'title_badge' => 'nullable|string|max:120',
         ]);
