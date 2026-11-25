@@ -10,6 +10,7 @@ use App\Models\PlatformSetting;
 use App\Models\Topic;
 use App\Models\Upvote;
 use App\Models\User;
+use App\Models\UserNotification;
 use App\Models\Work;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -227,6 +228,27 @@ class ModerationController extends Controller
             ]);
         }
 
+        if ($flag->target_author_id && $validated['action'] !== 'BAN_USER') {
+            $flagUrl = '/perfil';
+            if ($flag->target_type === 'WORK' && ($fw = Work::find($flag->target_id))) {
+                $flagUrl = '/obras/' . $fw->slug;
+            } elseif ($flag->target_type === 'TOPIC' && ($ft = Topic::find($flag->target_id))) {
+                $flagUrl = '/topicos/' . $ft->slug;
+            }
+            UserNotification::notify(
+                $flag->target_author_id,
+                $user,
+                $validated['action'] === 'APPROVE' ? 'MODERATION_APPROVED' : 'MODERATION_REJECTED',
+                $validated['action'] === 'APPROVE'
+                    ? 'Seu conteúdo foi revisado e mantido pela Moderação'
+                    : 'Seu conteúdo foi ocultado pela Moderação',
+                ($validated['moderator_note'] ?? null) ?: Str::limit($flag->target_title, 200),
+                $flag->target_type,
+                $flag->target_id,
+                $flagUrl
+            );
+        }
+
         $log = self::recordAuditLog(
             $user,
             'RESOLVE_FLAG_' . $validated['action'],
@@ -339,6 +361,19 @@ class ModerationController extends Controller
             $request
         );
 
+        UserNotification::notify(
+            $work->submitted_by_id,
+            $user,
+            $validated['status'] === 'APPROVED' ? 'MODERATION_APPROVED' : 'MODERATION_REJECTED',
+            $validated['status'] === 'APPROVED'
+                ? 'Seu texto “' . Str::limit($work->title, 80) . '” foi aprovado e publicado!'
+                : 'Seu texto “' . Str::limit($work->title, 80) . '” precisa de ajustes',
+            $validated['moderation_note'] ?? null,
+            'WORK',
+            $work->id,
+            '/obras/' . $work->slug
+        );
+
         $work->load(['category', 'submittedBy', 'comments']);
 
         return response()->json([
@@ -440,6 +475,19 @@ class ModerationController extends Controller
             $request
         );
 
+        UserNotification::notify(
+            $topic->author_id,
+            $user,
+            $validated['status'] === 'APPROVED' ? 'MODERATION_APPROVED' : 'MODERATION_REJECTED',
+            $validated['status'] === 'APPROVED'
+                ? 'Seu ensaio “' . Str::limit($topic->title, 80) . '” foi aprovado e publicado!'
+                : 'Seu ensaio “' . Str::limit($topic->title, 80) . '” precisa de ajustes',
+            $validated['moderation_note'] ?? null,
+            'TOPIC',
+            $topic->id,
+            '/topicos/' . $topic->slug
+        );
+
         $topic->load(['category', 'work', 'author', 'comments']);
 
         return response()->json([
@@ -473,11 +521,13 @@ class ModerationController extends Controller
 
         $targetTitle = '';
         $targetAuthorName = 'Membro da Comunidade';
+        $targetAuthorId = null;
         $isAuthor = false;
 
         if ($targetType === 'WORK') {
             $work = Work::with('submittedBy')->findOrFail($targetId);
             $isAuthor = ($work->submitted_by_id === $user->id);
+            $targetAuthorId = $work->submitted_by_id;
             if (!$user->hasRole('ADMIN', 'MODERATOR') && !$isAuthor) {
                 return response()->json([
                     'message' => 'Você não tem permissão para excluir esta publicação.',
@@ -490,6 +540,7 @@ class ModerationController extends Controller
         } elseif ($targetType === 'TOPIC') {
             $topic = Topic::with('author')->findOrFail($targetId);
             $isAuthor = ($topic->author_id === $user->id);
+            $targetAuthorId = $topic->author_id;
             if (!$user->hasRole('ADMIN', 'MODERATOR') && !$isAuthor) {
                 return response()->json([
                     'message' => 'Você não tem permissão para excluir este ensaio.',
@@ -502,6 +553,7 @@ class ModerationController extends Controller
         } elseif ($targetType === 'COMMENT') {
             $comment = Comment::with('author')->findOrFail($targetId);
             $isAuthor = ($comment->author_id === $user->id);
+            $targetAuthorId = $comment->author_id;
             if (!$user->hasRole('ADMIN', 'MODERATOR') && !$isAuthor) {
                 return response()->json([
                     'message' => 'Você não tem permissão para excluir este comentário.',
@@ -532,6 +584,19 @@ class ModerationController extends Controller
         Upvote::where('target_type', $targetType)
             ->where('target_id', $targetId)
             ->delete();
+
+        if (!$isAuthor && $targetAuthorId) {
+            UserNotification::notify(
+                $targetAuthorId,
+                $user,
+                'MODERATION_DELETED',
+                'Um conteúdo seu foi removido pela Moderação',
+                Str::limit($targetTitle, 120) . ' — Motivo: ' . $reason,
+                $targetType,
+                $targetId,
+                '/perfil'
+            );
+        }
 
         $log = self::recordAuditLog(
             $user,

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Models\UserNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -299,6 +300,19 @@ class AuthController extends Controller
             $request
         );
 
+        UserNotification::notify(
+            $target->id,
+            $actor,
+            'ROLE_UPDATED',
+            isset($validated['is_banned']) && ! $target->is_banned
+                ? 'Sua conta foi reativada pela Administração'
+                : 'Seu papel RBAC foi atualizado para ' . $target->role,
+            $reasonText,
+            'USER',
+            $target->id,
+            '/perfil'
+        );
+
         return response()->json([
             'user' => $target,
             'log' => $log,
@@ -330,6 +344,7 @@ class AuthController extends Controller
             'bio' => 'nullable|string|max:600',
             'avatar_url' => 'nullable|string',
             'cover_url' => 'nullable|string',
+            'dm_policy' => 'nullable|in:MUTUAL,FOLLOWERS,EVERYONE',
         ]);
 
         $updateData = [
@@ -343,6 +358,9 @@ class AuthController extends Controller
         }
         if (array_key_exists('cover_url', $validated)) {
             $updateData['cover_url'] = $validated['cover_url'] ?: null;
+        }
+        if (! empty($validated['dm_policy'])) {
+            $updateData['dm_policy'] = $validated['dm_policy'];
         }
 
         $user->update($updateData);

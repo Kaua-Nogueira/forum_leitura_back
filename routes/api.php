@@ -54,6 +54,12 @@ Route::post('/chat/messages', [SocialChatController::class, 'sendMessage']);
 Route::post('/chat/messages/{partnerId}/read', [SocialChatController::class, 'markConversationRead']);
 Route::delete('/chat/messages/{messageId}', [SocialChatController::class, 'deleteMessage']);
 
+// Notificações Pessoais
+Route::get('/notifications', [SocialChatController::class, 'listNotifications']);
+Route::post('/notifications/read-all', [SocialChatController::class, 'markAllNotificationsRead']);
+Route::post('/notifications/{id}/read', [SocialChatController::class, 'markNotificationRead']);
+Route::delete('/notifications/{id}', [SocialChatController::class, 'deleteNotification']);
+
 // Governança, Fila de Moderação, Logs do Sistema, Exclusão Auditada & Tag Global de Afiliado Amazon
 Route::get('/moderation/logs', [ModerationController::class, 'listLogs']);
 Route::post('/flags', [ModerationController::class, 'createFlag']);

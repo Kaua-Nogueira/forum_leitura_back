@@ -15,6 +15,7 @@ use App\Models\Topic;
 use App\Models\Upvote;
 use App\Models\User;
 use App\Models\UserFollow;
+use App\Models\UserNotification;
 use App\Models\Work;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -171,6 +172,14 @@ class PlatformController extends Controller
                 ->get()
             : collect([]);
 
+        $notifications = ($currentUser && Schema::hasTable('user_notifications'))
+            ? UserNotification::where('user_id', $currentUser->id)
+                ->orderByDesc('created_at')
+                ->orderByDesc('id')
+                ->limit(120)
+                ->get()
+            : collect([]);
+
         return response()->json([
             'categories' => $categories,
             'works' => $works,
@@ -183,6 +192,7 @@ class PlatformController extends Controller
             'users' => $users,
             'user_follows' => $userFollows,
             'direct_messages' => $directMessages,
+            'notifications' => $notifications,
         ]);
     }
 
@@ -411,11 +421,16 @@ class PlatformController extends Controller
         ]);
 
         $contextLabel = 'Discussão Geral';
+        $actionUrl = '/';
+        $targetOwnerId = null;
+
         if (!empty($validated['work_id'])) {
             $w = Work::find($validated['work_id']);
             if ($w) {
                 $w->increment('reviews_count');
                 $contextLabel = 'Obra: ' . $w->title;
+                $actionUrl = '/obras/' . $w->slug . '#comentarios';
+                $targetOwnerId = $w->submitted_by_id;
             }
         }
 
@@ -424,15 +439,52 @@ class PlatformController extends Controller
             if ($t) {
                 $t->increment('comments_count');
                 $contextLabel = 'Ensaio: ' . $t->title;
+                $actionUrl = '/topicos/' . $t->slug . '#comentarios-topico';
+                $targetOwnerId = $t->author_id;
             }
         }
 
         if (!empty($validated['series_entry_id'])) {
-            $se = SeriesEntry::find($validated['series_entry_id']);
+            $se = SeriesEntry::with('series')->find($validated['series_entry_id']);
             if ($se) {
                 $se->increment('comments_count');
                 $contextLabel = 'Nota de Série #' . $se->entry_number . ': ' . $se->title;
+                if ($se->series) {
+                    $actionUrl = '/series/' . $se->series->slug . '/' . $se->slug;
+                }
+                $targetOwnerId = $se->author_id;
             }
+        }
+
+        $notifiedIds = [(int) $user->id];
+        if (!empty($validated['parent_id'])) {
+            $parentComment = Comment::find($validated['parent_id']);
+            if ($parentComment && $parentComment->author_id && !in_array((int) $parentComment->author_id, $notifiedIds, true)) {
+                UserNotification::notify(
+                    $parentComment->author_id,
+                    $user,
+                    'REPLY_TO_COMMENT',
+                    $user->name . ' respondeu ao seu comentário',
+                    '“' . Str::limit($comment->body, 140) . '”',
+                    'COMMENT',
+                    $comment->id,
+                    $actionUrl
+                );
+                $notifiedIds[] = (int) $parentComment->author_id;
+            }
+        }
+
+        if ($targetOwnerId && !in_array((int) $targetOwnerId, $notifiedIds, true)) {
+            UserNotification::notify(
+                $targetOwnerId,
+                $user,
+                'COMMENT_ON_POST',
+                $user->name . ' comentou em ' . $contextLabel,
+                '“' . Str::limit($comment->body, 140) . '”',
+                'COMMENT',
+                $comment->id,
+                $actionUrl
+            );
         }
 
         $comment->load(['author', 'replies.author']);
@@ -542,25 +594,56 @@ class PlatformController extends Controller
 
         $upvotesCount = 1;
         $targetTitle = $validated['target_type'] . ' #' . $validated['target_id'];
+        $targetOwnerId = null;
+        $targetUrl = '/';
 
         if ($validated['target_type'] === 'TOPIC') {
             $topic = Topic::findOrFail($validated['target_id']);
             $topic->increment('upvotes_count');
             $upvotesCount = $topic->upvotes_count;
             $targetTitle = 'Ensaio: ' . $topic->title;
+            $targetOwnerId = $topic->author_id;
+            $targetUrl = '/topicos/' . $topic->slug;
         } elseif ($validated['target_type'] === 'SERIES_ENTRY') {
-            $entry = SeriesEntry::findOrFail($validated['target_id']);
+            $entry = SeriesEntry::with('series')->findOrFail($validated['target_id']);
             $entry->increment('upvotes_count');
             $upvotesCount = $entry->upvotes_count;
             $targetTitle = 'Nota #' . $entry->entry_number . ': ' . $entry->title;
+            $targetOwnerId = $entry->author_id;
+            if ($entry->series) {
+                $targetUrl = '/series/' . $entry->series->slug . '/' . $entry->slug;
+            }
         } elseif ($validated['target_type'] === 'WORK') {
             $work = Work::findOrFail($validated['target_id']);
             $targetTitle = 'Obra: ' . $work->title;
+            $targetOwnerId = $work->submitted_by_id;
+            $targetUrl = '/obras/' . $work->slug;
         } else {
             $comment = Comment::findOrFail($validated['target_id']);
             $comment->increment('upvotes_count');
             $upvotesCount = $comment->upvotes_count;
             $targetTitle = 'Comentário #' . $comment->id . ': ' . Str::limit($comment->body, 80);
+            $targetOwnerId = $comment->author_id;
+            if ($comment->work_id && ($w = Work::find($comment->work_id))) {
+                $targetUrl = '/obras/' . $w->slug . '#comentarios';
+            } elseif ($comment->topic_id && ($t = Topic::find($comment->topic_id))) {
+                $targetUrl = '/topicos/' . $t->slug . '#comentarios-topico';
+            } elseif ($comment->series_entry_id && ($se = SeriesEntry::with('series')->find($comment->series_entry_id)) && $se->series) {
+                $targetUrl = '/series/' . $se->series->slug . '/' . $se->slug;
+            }
+        }
+
+        if ($targetOwnerId) {
+            UserNotification::notify(
+                $targetOwnerId,
+                $user,
+                'UPVOTE',
+                $user->name . ' apreciou seu conteúdo',
+                $targetTitle,
+                $validated['target_type'],
+                (int) $validated['target_id'],
+                $targetUrl
+            );
         }
 
         $log = ModerationController::recordAuditLog(

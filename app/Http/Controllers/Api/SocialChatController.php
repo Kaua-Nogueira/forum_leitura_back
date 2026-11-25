@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\DirectMessage;
 use App\Models\User;
 use App\Models\UserFollow;
+use App\Models\UserNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class SocialChatController extends Controller
@@ -23,7 +25,7 @@ class SocialChatController extends Controller
 
     /**
      * GET /api/social/overview
-     * Retorna a rede de seguidores, diretório público de usuários e mensagens diretas do usuário autenticado.
+     * Retorna a rede de seguidores, diretório público de usuários, mensagens diretas e notificações do usuário autenticado.
      */
     public function overview(Request $request): JsonResponse
     {
@@ -36,6 +38,8 @@ class SocialChatController extends Controller
 
         $messages = collect([]);
         $unreadCount = 0;
+        $notifications = collect([]);
+        $unreadNotificationsCount = 0;
 
         if ($user) {
             $messages = DirectMessage::with(['sender', 'recipient'])
@@ -51,6 +55,18 @@ class SocialChatController extends Controller
             $unreadCount = DirectMessage::where('recipient_id', $user->id)
                 ->whereNull('read_at')
                 ->count();
+
+            if (Schema::hasTable('user_notifications')) {
+                $notifications = UserNotification::where('user_id', $user->id)
+                    ->orderByDesc('created_at')
+                    ->orderByDesc('id')
+                    ->limit(150)
+                    ->get();
+
+                $unreadNotificationsCount = UserNotification::where('user_id', $user->id)
+                    ->whereNull('read_at')
+                    ->count();
+            }
         }
 
         return response()->json([
@@ -58,6 +74,8 @@ class SocialChatController extends Controller
             'users' => $directoryUsers,
             'messages' => $messages,
             'unread_count' => $unreadCount,
+            'notifications' => $notifications,
+            'unread_notifications_count' => $unreadNotificationsCount,
         ]);
     }
 
@@ -114,6 +132,25 @@ class SocialChatController extends Controller
             'following_id' => $target->id,
         ]);
 
+        $isMutual = UserFollow::where('follower_id', $target->id)
+            ->where('following_id', $user->id)
+            ->exists();
+
+        UserNotification::notify(
+            $target->id,
+            $user,
+            'FOLLOW',
+            $isMutual
+                ? $user->name . ' seguiu você de volta!'
+                : $user->name . ' começou a seguir você',
+            $isMutual
+                ? 'Vocês agora se seguem mutuamente — o chat privado está liberado!'
+                : 'Siga de volta para liberar o chat privado e acompanhar suas publicações.',
+            'USER',
+            $user->id,
+            '/perfil/' . $user->id
+        );
+
         $log = ModerationController::recordAuditLog(
             $user,
             'FOLLOW_USER',
@@ -136,7 +173,7 @@ class SocialChatController extends Controller
 
     /**
      * POST /api/chat/messages
-     * Envia uma mensagem privada direta para outro usuário.
+     * Envia uma mensagem privada direta para outro usuário, respeitando a política de privacidade (MUTUAL / FOLLOWERS / EVERYONE).
      */
     public function sendMessage(Request $request): JsonResponse
     {
@@ -153,6 +190,7 @@ class SocialChatController extends Controller
             'shared_type' => 'nullable|in:WORK,TOPIC,SERIES,SERIES_ENTRY',
             'shared_slug' => 'nullable|string|max:255',
             'shared_title' => 'nullable|string|max:255',
+            'force_staff_override' => 'nullable|boolean',
         ]);
 
         $recipientId = (int) $validated['recipient_id'];
@@ -163,6 +201,37 @@ class SocialChatController extends Controller
         }
 
         $recipient = User::findOrFail($recipientId);
+
+        $policy = strtoupper((string) ($recipient->dm_policy ?: 'MUTUAL'));
+        $senderFollowsRecipient = UserFollow::where('follower_id', $user->id)
+            ->where('following_id', $recipient->id)
+            ->exists();
+        $recipientFollowsSender = UserFollow::where('follower_id', $recipient->id)
+            ->where('following_id', $user->id)
+            ->exists();
+
+        $isStaffOverride = ! empty($validated['force_staff_override']) && $user->hasRole('ADMIN', 'MODERATOR');
+
+        $allowed = $isStaffOverride
+            || $policy === 'EVERYONE'
+            || ($policy === 'FOLLOWERS' && $senderFollowsRecipient)
+            || ($policy === 'MUTUAL' && $senderFollowsRecipient && $recipientFollowsSender);
+
+        if (! $allowed) {
+            if ($policy === 'FOLLOWERS') {
+                $reason = 'Para enviar mensagem privada a ' . $recipient->name . ', siga esta pessoa primeiro.';
+            } elseif (! $senderFollowsRecipient && $recipientFollowsSender) {
+                $reason = $recipient->name . ' já segue você! Siga de volta para liberar o chat privado.';
+            } elseif ($senderFollowsRecipient && ! $recipientFollowsSender) {
+                $reason = 'Chat privado liberado apenas quando ambos se seguem. Aguarde ' . $recipient->name . ' seguir você de volta.';
+            } else {
+                $reason = 'Chat privado disponível apenas entre seguidores mútuos. Siga ' . $recipient->name . ' e aguarde ser seguido de volta.';
+            }
+
+            return response()->json([
+                'message' => $reason,
+            ], 403);
+        }
 
         $msg = DirectMessage::create([
             'sender_id' => $user->id,
@@ -175,6 +244,17 @@ class SocialChatController extends Controller
         ]);
 
         $msg->load(['sender', 'recipient']);
+
+        UserNotification::notify(
+            $recipient->id,
+            $user,
+            'DIRECT_MESSAGE',
+            'Nova mensagem privada de ' . $user->name,
+            Str::limit($msg->body, 140),
+            'USER',
+            $user->id,
+            '/mensagens/' . $user->id
+        );
 
         $log = ModerationController::recordAuditLog(
             $user,
@@ -253,6 +333,106 @@ class SocialChatController extends Controller
             'deleted' => true,
             'message_id' => $messageId,
             'log' => $log,
+        ]);
+    }
+
+    /**
+     * GET /api/notifications
+     * Lista as notificações pessoais do usuário autenticado.
+     */
+    public function listNotifications(Request $request): JsonResponse
+    {
+        $user = $this->resolveCurrentUser($request);
+        if (! $user) {
+            return response()->json([
+                'message' => 'Faça login para visualizar suas notificações.',
+            ], 401);
+        }
+
+        if (! Schema::hasTable('user_notifications')) {
+            return response()->json([
+                'notifications' => [],
+                'unread_count' => 0,
+            ]);
+        }
+
+        $notifications = UserNotification::where('user_id', $user->id)
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->limit(150)
+            ->get();
+
+        $unreadCount = UserNotification::where('user_id', $user->id)
+            ->whereNull('read_at')
+            ->count();
+
+        return response()->json([
+            'notifications' => $notifications,
+            'unread_count' => $unreadCount,
+        ]);
+    }
+
+    /**
+     * POST /api/notifications/{id}/read
+     * Marca uma notificação específica do usuário como lida.
+     */
+    public function markNotificationRead(Request $request, int $id): JsonResponse
+    {
+        $user = $this->resolveCurrentUser($request);
+        if (! $user) {
+            return response()->json(['message' => 'Autenticação necessária.'], 401);
+        }
+
+        $notification = UserNotification::where('user_id', $user->id)->findOrFail($id);
+        if (! $notification->read_at) {
+            $notification->update(['read_at' => now()]);
+        }
+
+        return response()->json([
+            'notification' => $notification,
+        ]);
+    }
+
+    /**
+     * POST /api/notifications/read-all
+     * Marca todas as notificações do usuário como lidas.
+     */
+    public function markAllNotificationsRead(Request $request): JsonResponse
+    {
+        $user = $this->resolveCurrentUser($request);
+        if (! $user) {
+            return response()->json(['message' => 'Autenticação necessária.'], 401);
+        }
+
+        $updated = 0;
+        if (Schema::hasTable('user_notifications')) {
+            $updated = UserNotification::where('user_id', $user->id)
+                ->whereNull('read_at')
+                ->update(['read_at' => now()]);
+        }
+
+        return response()->json([
+            'updated_count' => $updated,
+        ]);
+    }
+
+    /**
+     * DELETE /api/notifications/{id}
+     * Exclui uma notificação do usuário autenticado.
+     */
+    public function deleteNotification(Request $request, int $id): JsonResponse
+    {
+        $user = $this->resolveCurrentUser($request);
+        if (! $user) {
+            return response()->json(['message' => 'Autenticação necessária.'], 401);
+        }
+
+        $notification = UserNotification::where('user_id', $user->id)->findOrFail($id);
+        $notification->delete();
+
+        return response()->json([
+            'deleted' => true,
+            'notification_id' => $id,
         ]);
     }
 }

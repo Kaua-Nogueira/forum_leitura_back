@@ -21,6 +21,7 @@ class User extends Authenticatable
         'bio',
         'avatar_url',
         'cover_url',
+        'dm_policy',
         'is_banned',
         'reputation_score',
     ];
